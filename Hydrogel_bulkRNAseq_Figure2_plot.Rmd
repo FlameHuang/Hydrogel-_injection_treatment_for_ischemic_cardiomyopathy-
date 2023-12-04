@@ -1,0 +1,624 @@
+---
+title: "Hydrogel_bulkRNAseq_Figure2_plot"
+author: "HuangFei"
+date: "2023/7/11"
+output: html_document
+---
+
+## 0. Load dependence
+```{r,echo=FALSE,warning=FALSE}
+for(i in c('ggplot2','ggpubr','data.table','cowplot',
+           'reshape2','ggsci','pheatmap','gdata')){
+  require(i, quietly = T, character.only = T)
+}
+options(stringsAsFactors = F)
+```
+
+
+```{r, eval=TRUE,echo=FALSE}
+library(ggplot2)
+library(DOSE)
+library(AnnotationDbi)
+library(pheatmap)
+library(RColorBrewer)
+
+my_theme <- theme(plot.title = element_text(hjust = 0.5, size = 17),
+                  legend.position = 'right',
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=18),
+                  axis.text.x = element_text(size=16),
+                  axis.title.x = element_text(size=16),
+                  axis.title.y = element_text(size=16),
+                  axis.text.y  = element_text(size=16),
+                  panel.border = element_blank(),
+                  axis.line.x = element_line(size=0.25, color="black"),
+                  axis.line.y = element_line(size=0.25, color="black"),
+                  panel.grid.minor.x = element_blank(), panel.grid.minor.y = element_blank(),
+                  panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank(),
+                  panel.background = element_rect(fill='white'),
+                  legend.key=element_blank(),
+                  strip.text.x = element_text(size=15),
+                  strip.text.y = element_text(size=15),
+                  strip.background = element_rect(colour = 'white', fill = 'white'))
+```
+
+
+### define a function to calculate standard error based on standard deviation
+```{r}
+se <- function(x, na.rm = FALSE) {
+ if (na.rm) x <- na.omit(x)
+ sqrt(var(x) / length(x))
+}
+
+std <- function(a) sd(a) / sqrt(length(a))
+```
+
+### define functions to run GO and KEGG respectively
+```{r}
+set.seed(1000)
+
+library(clusterProfiler)
+library(org.Rn.eg.db)
+
+run_GO_rat = function(candidate_gene, background_gene=NULL, gene_format = 'SYMBOL', ontology = 'BP', cutoff=0.05,
+                  showCategory=10,font.size=10,title = 'GO enrichment'){
+  diff_gene_ID<-clusterProfiler::bitr(candidate_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+  if(is.null(background_gene)){
+    ego <-  clusterProfiler::simplify(enrichGO(gene = diff_gene_ID$ENTREZID,  OrgDb = org.Rn.eg.db,
+                    keyType = 'ENTREZID', ont = ontology, readable = T,
+                    pAdjustMethod = "BH", qvalueCutoff  = cutoff, pvalueCutoff  = cutoff))
+  } else{
+    background_gene = clusterProfiler::bitr(background_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+    ego <-  simplify(enrichGO(gene = diff_gene_ID$ENTREZID,  OrgDb = org.Rn.eg.db,
+                              universe = background_gene$ENTREZID,
+                     keyType = 'ENTREZID', ont = ontology, readable = T,
+                     pAdjustMethod = "BH", qvalueCutoff  = cutoff, pvalueCutoff  = cutoff))
+  }
+
+  if(nrow(ego@result)>0){
+    print(enrichplot::dotplot(ego, showCategory = showCategory, font.size = font.size, x='Count',title=title))
+  }
+  return(ego)
+}
+
+```
+
+```{r}
+load('~/Project/sc_Cardiomyocytes/bulk_RNAseq/quant/Rat_cardiac_bulkRNAseq_gene_count_and_Mfuzz_result.RData')
+```
+
+## merge similar clusters
+```{r}
+sham.high = names(cl$cluster[cl$cluster==1])
+stiff.high = names(cl$cluster[cl$cluster==2])
+soft.high = names(cl$cluster[cl$cluster==16])
+MI.high = names(cl$cluster[cl$cluster==14])
+
+cardi.high = unique(c(names(cl$cluster[cl$cluster==9]),
+                      names(cl$cluster[cl$cluster==10])))
+
+soft.low =  unique(c(names(cl$cluster[cl$cluster==3]),
+                      names(cl$cluster[cl$cluster==8])))
+
+sham.low = unique(c(names(cl$cluster[cl$cluster==4]),
+                    names(cl$cluster[cl$cluster==7])))
+
+stable.genes = rownames(aver_mat)[!rownames(aver_mat)%in%names(cl$cluster)]
+length(stable.genes)
+```
+
+## heatmaps to show unbiased clustering expression
+```{r,fig.width=4,fig.height=7}
+library(ComplexHeatmap)
+head(aver_mat)
+aver_mat = aver_mat[,rev(1:4)]
+
+mat2use = aver_mat[c(MI.high,soft.high,stiff.high,sham.high,sham.low,names(cl$cluster[cl$cluster==6]),cardi.high),]
+
+
+
+
+gene.anno = data.frame(gene = c(MI.high, soft.high, stiff.high, sham.high,
+                                sham.low, names(cl$cluster[cl$cluster==6]), cardi.high),
+                       Cluster = c(rep(7,length(MI.high)),
+                                   rep(6,length(soft.high)),
+                                   rep(5,length(stiff.high)),
+                                   rep(4,length(sham.high)),
+                                   rep(2,length(sham.low)),
+                                   rep(3,length(cl$cluster[cl$cluster==6])),
+                                   rep(1,length(cardi.high))))
+
+head(gene.anno)
+
+membership =  apply(cl$membership,1,max)
+head(membership)
+
+rownames(gene.anno) = gene.anno$gene
+gene.anno = gene.anno[order(gene.anno$Cluster),]
+head(gene.anno)
+gene.anno$membership = membership[gene.anno$gene]
+table(gene.anno[gene.anno$membership>0.5,]$Cluster)
+gene.anno$Cluster = paste0('C',gene.anno$Cluster)
+gene.anno$seq = 1:nrow(gene.anno)
+
+mat2plot = mat2use[rownames(gene.anno[gene.anno$membership>0.5,]),]
+mat2plot = t(scale(t(mat2plot)))
+
+#row_anno = rowAnnotation(foo = anno_mark(at = gene.anno$seq,
+#                                         labels = gene2plot$gene))
+
+#pheatmap::pheatmap(mat2plot, show_rownames = F, cluster_rows = F, cluster_cols = F,
+#         angle_col = 0, cellwidth = 40)
+
+mat2plot[mat2plot>1]=1
+mat2plot[mat2plot<(-1)]=-1
+
+Heatmap(mat2plot, name = 'Z-score', cluster_rows = F, cluster_columns = F,
+        row_split = gene.anno[gene.anno$membership>0.5,]$Cluster,use_raster = F,
+        show_row_names = F, show_column_names = T, width =  5,
+        col = colorRampPalette(rev(brewer.pal(n = 7,name ="RdBu")))(20))
+
+Heatmap(mat2plot, name = 'Z-score', cluster_rows = F, cluster_columns = F,
+        row_split = gene.anno[gene.anno$membership>0.5,]$Cluster,use_raster = F,
+        show_row_names = F, show_column_names = T, width =  5,
+        col = colorRampPalette(rev(brewer.pal(n = 7,name ="RdYlBu")))(20))
+
+Heatmap(mat2plot, name = 'Z-score', cluster_rows = F, cluster_columns = F,
+        row_split = gene.anno[gene.anno$membership>0.5,]$Cluster,use_raster = F,
+        show_row_names = F, show_column_names = T, width =  5,
+        col = viridis::viridis(20))
+
+```
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/Fig2A_gene_clustering_heatmap.pdf',4,7)
+Heatmap(mat2plot, name = 'Z-score', cluster_rows = F, cluster_columns = F,
+        row_split = gene.anno[gene.anno$membership>0.3,]$Cluster,use_raster = F,
+        show_row_names = F, show_column_names = T, width =  5,
+        col = colorRampPalette(rev(brewer.pal(n = 7,name ="RdYlBu")))(20))
+dev.off()
+```
+
+## average profile (smooth fit)
+```{r,fig.width=4,fig.height=15}
+GE.melt = melt(as.matrix(aver_mat[c(MI.high,soft.high,stiff.high,sham.high,sham.low,names(cl$cluster[cl$cluster==6]),cardi.high),]))
+
+colnames(GE.melt) = c('gene','Group','value')
+GE.melt = merge(GE.melt, gene.anno[gene.anno$membership>0.5,1:2], by = 'gene')
+setDT(GE.melt)
+GE.melt[,Group:=factor(Group,levels = rev(c('MI','MI_soft_Gel','MI_stiff_Gel','Sham')))]
+GE.melt[,seqs:=as.numeric(Group)]
+head(GE.melt)
+GE.mean = GE.melt[,.(ge = mean(value), ge_sd = std(value)), by = .(Group,Cluster)]
+
+GE.mean[,Group:=factor(Group,levels = rev(c('MI','MI_soft_Gel','MI_stiff_Gel','Sham')))]
+GE.mean[,seqs:=as.numeric(Group)]
+
+```
+
+
+```{r,fig.width=4,fig.height=3}
+col.frame = data.frame(Cluster = 1:7, co = c(4,3,1,2,5,6,7))
+
+for(i in 1:6){
+  bar =  ggplot(GE.melt[Cluster==paste0('C',i)],aes(x = seqs, y = value)) +
+    geom_smooth(color=pal_jama()(7)[col.frame$co[i]], na.rm = TRUE,
+                method="loess", span=0.75)+ scale_x_continuous(labels = rep('',4), breaks = 1:4)+
+  labs(x = '', y = 'FPKM',title = paste0('Cluster',i)) +  theme_bw()  + theme(legend.position = 'none',axis.text.x = element_text(size=16,angle = 45,hjust = 0.95,vjust = 0.95))+
+   theme(
+      axis.text=element_text(size=16),
+      axis.title=element_text(size=16),
+      legend.text = element_text(size =16),
+      legend.title=element_blank(),
+      plot.title = element_text(size=18, face="bold", hjust = 0.5),
+      aspect.ratio=0.99,
+      legend.position="bottom",
+      strip.text.x = element_text(size = 16))
+  assign(paste0('cl',i,'.bar'),bar)
+  print(bar)
+}
+
+```
+
+```{r,fig.width=4,fig.height=4}
+ cl7.bar =  ggplot(GE.melt[Cluster==paste0('C7')],aes(x = seqs, y = value)) +
+    geom_smooth(color=pal_jama()(7)[col.frame$co[7]], na.rm = TRUE, method="loess", span=0.75)+
+  scale_x_continuous(labels = unique(sort(GE.mean$Group)), breaks = 1:4)+
+  labs(x = '', y = 'FPKM',title = paste0('Cluster7')) +  theme_bw()  + theme(legend.position = 'none',axis.text.x = element_text(size=16,angle = 45,hjust = 0.95,vjust = 0.95))+
+   theme(
+      axis.text=element_text(size=16),
+      axis.title=element_text(size=16),
+      legend.text = element_text(size =16),
+      legend.title=element_blank(),
+      plot.title = element_text(size=18, face="bold", hjust = 0.5),
+      aspect.ratio=0.99,
+      legend.position="bottom",
+      strip.text.x = element_text(size = 16))
+
+cl7.bar
+```
+
+
+```{r,fig.width=3.5,fig.height=20}
+library(cowplot)
+aver.bar = plot_grid(cl1.bar,cl2.bar,cl3.bar,cl4.bar,cl5.bar,cl6.bar,cl7.bar,
+          ncol = 1, rel_heights = c(rep(0.75,6),1))
+
+aver.bar
+```
+
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/Fig2B_gene_clustering_smooth_curves.pdf',3.5,20)
+aver.bar
+dev.off()
+```
+
+
+## GO 
+```{r,fig.width=9,fig.height=4.5}
+gene.cluster = gene.anno[,]
+setDT(gene.cluster)
+table(gene.cluster$Cluster)
+
+C1.bp = run_GO_rat(gene.cluster[Cluster=='C1']$gene)
+C1.bp_df = as.data.table(C1.bp@result)
+C1.bp_df
+
+
+C23.bp = run_GO_rat(gene.cluster[membership>0.3][Cluster%in%c('C2','C3')]$gene)
+dotplot(C23.bp)
+C23.bp_df = as.data.table(C23.bp@result)
+C23.bp_df
+
+
+C23.bp_df[,logP:=-log10(pvalue)]
+
+C23.bar = ggbarplot(C23.bp_df[-1], x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[3],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C23.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig3/C23_GO_barplot.pdf',9,4.5)
+C23.bar
+dev.off()
+```
+
+```{r,fig.width=10,fig.height=4.5}
+C1.bp_df[,logP:=-log10(pvalue)]
+
+C1.bar = ggbarplot(C1.bp_df[c(1,3,4,8,9,14,16,19)], x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[col.frame$co[1]],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C1.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/C1_GO_barplot.pdf',10,4.5)
+C1.bar
+dev.off()
+```
+
+```{r,fig.width=10,fig.height=4.5}
+C2.bp = run_GO_rat(gene.cluster[Cluster=='C2']$gene)
+C2.bp_df = as.data.table(C2.bp@result)
+C2.bp_df
+C2.bp_df[,logP:=-log10(pvalue)]
+
+C2.bar = ggbarplot(C2.bp_df[c(1,3,4,5,7,13,27,28)], x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[col.frame$co[2]],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C2.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/C2_GO_barplot.pdf',10,4.5)
+C2.bar
+dev.off()
+```
+
+
+```{r,fig.width=10,fig.height=4}
+C3.bp = run_GO_rat(gene.cluster[Cluster=='C3']$gene)
+C3.bp_df = as.data.table(C3.bp@result)
+C3.bp_df
+C3.bp_df[,logP:=-log10(pvalue)]
+
+C3.bar = ggbarplot(C3.bp_df[1:6,], x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[col.frame$co[3]],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C3.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/C3_GO_barplot.pdf',10,4)
+C3.bar
+dev.off()
+```
+
+
+```{r,fig.width=10,fig.height=4}
+C4.bp = run_GO_rat(gene.cluster[Cluster=='C4']$gene)
+C4.bp_df = as.data.table(C4.bp@result)
+C4.bp_df
+C4.bp_df[,logP:=-log10(pvalue)]
+
+C4.bar = ggbarplot(C4.bp_df[c(1,2,5,6,9,17,21)], x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[col.frame$co[4]],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C4.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/C4_GO_barplot.pdf',10,4)
+C4.bar
+dev.off()
+```
+
+
+```{r,fig.width=9,fig.height=3.5}
+C5.bp = run_GO_rat(gene.cluster[Cluster=='C5']$gene)
+C5.bp_df = as.data.table(C5.bp@result)
+C5.bp_df
+C5.bp_df[,logP:=-log10(pvalue)]
+
+C5.bar = ggbarplot(C5.bp_df, x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[col.frame$co[5]],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C5.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/C5_GO_barplot.pdf',9,3.5)
+C5.bar
+dev.off()
+```
+
+
+```{r,fig.width=9,fig.height=3}
+C6.bp = run_GO_rat(gene.cluster[Cluster=='C6']$gene)
+C6.bp_df = as.data.table(C6.bp@result)
+C6.bp_df
+C6.bp_df[,logP:=-log10(pvalue)]
+
+C6.bar = ggbarplot(C6.bp_df, x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[col.frame$co[6]],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C6.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/C6_GO_barplot.pdf',9,3)
+C6.bar
+dev.off()
+```
+
+
+```{r,fig.width=7,fig.height=2}
+C7.bp = run_GO_rat(gene.cluster[Cluster=='C7']$gene)
+C7.bp_df = as.data.table(C7.bp@result)
+C7.bp_df
+C7.bp_df[,logP:=-log10(pvalue)]
+
+C7.bar = ggbarplot(C7.bp_df, x = 'Description', y = 'logP',
+                   fill = pal_jama()(7)[col.frame$co[7]],
+        position = position_dodge(), rotate = TRUE,width = 0.7,sort.val =  'asc' ) + 
+  geom_hline(yintercept=c(-log10(0.05)),cex=1, colour="#CFCFCF", linetype="dashed")+
+  labs( x ='',y='-log10(p-value)') + my_theme 
+
+C7.bar
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig2/C7_GO_barplot.pdf',7,2)
+C7.bar
+dev.off()
+```
+
+```{r,fig.width=8,fig.height=20}
+plot_grid(C1.bar,C2.bar,C3.bar,C4.bar,C5.bar,C6.bar,C7.bar,
+          ncol = 1, rel_heights = c(rep(1,2),rep(0.9,2),0.75,0.65,0.35))
+```
+
+```{r}
+for(i in 1:7){
+  go = eval(parse(text = paste0('C',i,'.bp_df')))
+  write.table(go, quote = F, row.names = F, sep = '\t',
+              file = paste0('~/Project/sc_Cardiomyocytes/Figures/result/GO/C',i,'_GO_result.txt'))
+}
+```
+
+## output 
+```{r}
+C1.genes = unique(unlist(strsplit(C1.bp_df[-c(21:50,62:84)]$geneID,'/')))
+length(C1.genes)
+
+write.table(C1.genes, quote = F, row.names = F, col.names = F,
+            file = '~/Project/sc_Cardiomyocytes/Figures/result/DEG/C1_genes.txt')
+
+write.table(gene.cluster[membership>0.4][Cluster=='C2']$gene, quote = F, row.names = F, col.names = F,
+            file = '~/Project/sc_Cardiomyocytes/Figures/result/DEG/C2_genes.txt')
+
+head(stable.genes)
+write.table(stable.genes[1:490], quote = F, row.names = F, col.names = F,
+            file = '~/Project/sc_Cardiomyocytes/Figures/result/DEG/stable_genes.txt')
+
+write.table(gene.cluster, quote = F, row.names = F, col.names = T, sep = '\t',
+            file = '~/Project/sc_Cardiomyocytes/Figures/result/DEG/Rat_bulk_clustering_genes.txt')
+```
+
+## DEG analysis 
+```{r}
+head(gene_count); dim(gene_count)
+
+sub.info = meta.info[meta.info$Group%in%c('Sham','MI'),]
+
+Sham_vs_MI.DEG = run_DESeq2_pipeline(gene.counts = gene_count[,sub.info$ID], sub.info,
+                                    group1 = 'Sham', group2 = 'MI',
+                                    plot_MA = F, export_form 
+                                    = 'all')
+
+Sham_vs_MI.DEG_sig = Sham_vs_MI.DEG[padj<0.05&abs(log2FoldChange)>log2(2)]
+
+Sham_vs_MI.DEG_sig
+
+table(Sham_vs_MI.DEG_sig$Group)
+```
+
+
+### volcano plots
+```{r,fig.width=5,fig.height=4.5}
+Sham_vs_MI.DEG$Group = 'Stable'
+Sham_vs_MI.DEG[log2FoldChange>log2(2)&padj<0.05]$Group = 'Sham'
+Sham_vs_MI.DEG[log2FoldChange<(-log2(2))&padj<0.05]$Group = 'MI'
+table(Sham_vs_MI.DEG$Group)
+
+Sham_vs_MI.DEG[,Group:=factor(Group,levels = c('Sham','MI','Stable'))]
+
+Sham_vs_MI.DEG[,logFDR:=-log10(padj)]
+toplot = Sham_vs_MI.DEG[is.finite(log2FoldChange)][is.finite(padj)]
+summary(toplot$logFDR)
+summary(toplot$log2FoldChange)
+
+high = nrow(Sham_vs_MI.DEG[log2FoldChange>log2(2)&padj<0.05])
+low = nrow(Sham_vs_MI.DEG[log2FoldChange<(-log2(2))&padj<0.05])
+
+volcano_DEG <- ggplot(toplot,
+                aes(x=log2FoldChange,y=logFDR, color=Group)
+      )+geom_point(alpha=1,shape=16
+      )+scale_color_manual(values=c("#de4f48","#4979B6",'#363636')
+      )+labs(x="log2(Sham/MI)",
+             y="-log10(FDR)", title = ''
+      ) + xlim(c(-10,10))+ ylim(c(0,50))
+ 
+volcano_DEG = volcano_DEG+geom_hline(yintercept=-log10(0.05), cex=1, colour="darkgrey", linetype="dashed"
+)+geom_vline(xintercept=c(-log2(2),log2(2)),cex=1, colour="darkgrey", linetype="dashed")+
+  my_theme+theme(legend.title = element_blank(),legend.position = 'none') + 
+  annotate('text',x=7,y=30,label=paste0('Sham-high\n(n=',high,')'),color='black',size=5)+
+  annotate('text',x=-7,y=30,label=paste0('MI-high\n(n=',low,')'),color='black',size=5)
+
+print(volcano_DEG)
+```
+
+## GO analysis of Sham vs MI
+```{r}
+sham.bp = run_GO_rat(Sham_vs_MI.DEG_sig[Group=='Sham']$gene_name)
+sham.bp_df = as.data.table(sham.bp@result)
+sham.bp_df
+
+MI.bp = run_GO_rat(Sham_vs_MI.DEG_sig[Group=='MI']$gene_name)
+MI.bp_df = as.data.table(MI.bp@result)
+MI.bp_df
+```
+
+
+```{r,fig.width=5,fig.height=6}
+DEG = Sham_vs_MI.DEG_sig[abs(log2FoldChange)>2]
+DEG$seq = 1:nrow(DEG)
+mat2plot = aver_mat[DEG$gene_name,]
+mat2plot = t(scale(t(mat2plot)))
+dim(mat2plot)
+
+max(mat2plot)
+min(mat2plot)
+
+mat2plot[mat2plot>1] = 1
+mat2plot[mat2plot<(-1)] = -1
+
+pheatmap::pheatmap(mat2plot, show_rownames = F, show_colnames = T, cluster_cols = F)
+
+gene2show = unique(c(paste0('Myh',6:7),paste0('Npp',c('a','b')),
+              'Xirp2','Ankrd1','Btg2','Dcn','Serpine1','Tgfb1',
+              'Asb15','Dlg1','Ryr2','Tnni3k','Fgf13','Cacna2d1','Casq2'))
+
+row_anno = rowAnnotation(foo = anno_mark(at = DEG[gene_name%in%gene2show,]$seq,
+                                         labels = DEG[gene_name%in%gene2show,]$gene_name))
+
+ hmcols <- colorRampPalette(rev(brewer.pal(n = 7,name ="RdBu")))(100)
+
+  Heatmap(mat2plot, name = 'Z-score', cluster_rows = T, cluster_columns = F,col = hmcols,
+         row_split = DEG$Group, use_raster = F,
+         right_annotation = row_anno, clustering_method_rows = 'ward.D2',
+         show_row_names = F, show_column_names = T)
+
+```
+
+
+
+
+## read TPM
+```{r}
+library(org.Rn.eg.db)
+
+gene_count = read.table('~/Project/sc_Cardiomyocytes/bulk_RNAseq/rsem_result/rat_heart_bulk_merged_gene_counts.mat', header = T, sep = '\t', row.names = 1)
+gene_count[1:5,1:5]
+
+gene_TPM = read.table('~/Project/sc_Cardiomyocytes/bulk_RNAseq/rsem_result/rat_heart_bulk_merged_gene_TPM.mat', header = T, sep = '\t', row.names = 1)
+
+
+rownames(gene_count) <- do.call(rbind, strsplit(rownames(gene_count),'[.]'))[,1] -> rownames(gene_TPM) 
+
+geneID = clusterProfiler::bitr(rownames(gene_count), fromType = 'ENSEMBL', toType = 'SYMBOL', OrgDb = 'org.Rn.eg.db')
+
+geneID = geneID[!duplicated(geneID$SYMBOL),]
+
+gene_count = gene_count[geneID$ENSEMBL,]
+rownames(gene_count) = geneID$SYMBOL
+
+
+gene_TPM = gene_TPM[geneID$ENSEMBL,]
+rownames(gene_TPM) = geneID$SYMBOL
+
+
+for(i in 1:ncol(gene_count)){
+  gene_count[,i] = as.integer(round(gene_count[,i],0))
+}
+
+head(gene_count)
+head(gene_TPM)
+```
+
+
+##
+```{r}
+gene.cluster = fread('~/Project/sc_Cardiomyocytes/Figures/result/DEG/Rat_bulk_clustering_genes.txt',
+                     header = T, sep = '\t')
+#gene.cluster = gene.cluster[membership>0.3]
+table(gene.cluster$Cluster)
+gene.cluster[gene=='Ppara']
+gene.cluster[gene%in%c('Nppa','Nppb','Ankrd1')]
+
+TF_genes = fread('~/Project/DataBase/transcription_factors/Rattus_norvegicus_TF.txt',
+                 header = T, sep = '\t')
+TF_genes
+
+C1.TF = gene.cluster[Cluster=='C1'&gene%in%TF_genes$Symbol]$gene
+sort(C1.TF)
+
+C2.TF = gene.cluster[Cluster=='C2'&gene%in%TF_genes$Symbol]$gene
+sort(C2.TF)
+```
+
+```{r}
+library(GENIE3)
+bulk.mat = assay(norm_mat)
+
+C1.cor = GENIE3(bulk.mat[gene.cluster[Cluster=='C1']$gene,], regulators = C1.TF)
+C1.cor = GENIE3(as.matrix(gene_TPM[gene.cluster[Cluster=='C1']$gene,]), regulators = C1.TF)
+
+C1.linkList <- getLinkList(C1.cor)
+setDT(C1.linkList)
+C1.linkList[weight>0.05]
+C1.linkList[targetGene=='Myh6']
+C1.linkList[regulatoryGene=='Ppara'][grep('Cpt1|Myh6',targetGene)]
+
+```
+
+

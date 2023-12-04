@@ -1,0 +1,829 @@
+---
+title: "Hydrogel_bulkRNAseq_Figure3_plot"
+author: "HuangFei"
+date: "2023/6/2"
+output: html_document
+---
+
+## Load dependence
+```{r,warning=FALSE,results='hide'}
+options(stringsAsFactors = F)
+library(ggplot2)
+library(ggpubr)
+library(ggsci)
+library(ggforce)
+library(tibble)
+library(data.table)
+library(org.Rn.eg.db)
+library(clusterProfiler, quietly = T)
+library(DOSE, quietly = T)
+library(factoextra)
+library(FactoMineR)
+library(pheatmap)
+library(plotly)
+library(plot3D)
+library(tidyverse)
+library(RColorBrewer)
+```
+
+```{r,echo=FALSE}
+library(ggplot2)
+my_theme <- theme(plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.position = 'right',
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=15),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15),
+                  panel.border = element_blank(),
+                  axis.line.x = element_line(size=0.25, color="black"),
+                  axis.line.y = element_line(size=0.25, color="black"),
+                  panel.grid.minor.x = element_blank(), panel.grid.minor.y = element_blank(),
+                  panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank(),
+                  panel.background = element_rect(fill='white'),
+                  legend.key=element_blank(),
+                  strip.text.x = element_text(size=15),
+                  strip.text.y = element_text(size=15),
+                  strip.background = element_rect(colour = 'white', fill = 'white'))
+```
+
+
+#### a pipeline to run DGE analysis using DESeq2
+```{r,echo=FALSE}
+### notice: the contrast of DESeq is group2 vs group1, which means foldchange > 0 = group2 high, foldchange <0 = group2 low
+library(DESeq2)
+
+run_DESeq2_pipeline <- function(gene.counts,### a gene counts matrix
+                                meta.info, ##a factor to define two groups (notice: you should redefine the factor levels)
+                                group1, ##
+                                group2,
+                                FDR_cutoff = 0.05, ### the threshold of FDR
+                                log2FC_cutoff =1, ### the threshold of log2FoldChange
+                                plot_MA = FASLE,
+                                export_form = 'signif'
+){
+  require('data.table', quietly = T)
+  require('DESeq2', quietly = T)
+  ### contrust 
+  meta.info = transform(meta.info, Group = factor(Group, 
+                                                  levels = c(group2,group1)))
+  
+  dds <- DESeqDataSetFromMatrix(countData = gene.counts,
+                                colData = meta.info,
+                                design= ~Group)
+  ### run DESeq2
+  dds <- DESeq(dds)
+  contrast_name <- resultsNames(dds)[2] # lists the coefficients
+  
+  ### extract the significant DGE 
+  res <- results(dds, 
+               lfcThreshold = log2FC_cutoff,
+               alpha = FDR_cutoff,
+               name=contrast_name)
+# or to shrink log fold changes association with condition:
+res <- lfcShrink(dds, coef=contrast_name, type="apeglm")
+
+print(summary(res))
+
+
+
+res.table = tibble::rownames_to_column(data.frame(res),var = 'gene_name')
+setDT(res.table)
+res.table$Group = group1
+res.table[log2FoldChange<0]$Group = group2
+
+res.sig = res.table[padj<FDR_cutoff & abs(log2FoldChange)>log2FC_cutoff][order(padj,-log2FoldChange)]
+
+
+#res.sig$gene_id = substr(res.sig$gene_id,1,18)
+
+if(plot_MA==TRUE){
+  
+  res.table$sig <- as.factor(ifelse(res.table$padj < FDR_cutoff & abs(res.table$log2FoldChange) >= log2FC_cutoff,ifelse(res.table$log2FoldChange > log2FC_cutoff ,paste0(group2,'-high'),paste0(group1,'-high')),'No_diff'))
+
+res.table$sig = factor(res.table$sig,
+                       levels = c(paste0(group2,'-high'),'No_diff',paste0(group1,'-high')))
+
+
+res.table$logPvalue = -log10(res.table$padj)
+
+volcano<-ggplot(res.table[res.table$logPvalue<100,],
+                aes(x=log2FoldChange,
+                              y=-log10(padj), color=sig)
+      )+geom_point(alpha=0.7,shape=16
+      )+scale_color_manual(values=c("#de4f48","grey","#4979B6")
+      )+labs(x="log FC",y="-log10 (Adjusted p Value)"
+      )
+volcano = volcano+geom_hline(yintercept=-log10(FDR_cutoff), cex=1, colour="darkgrey", linetype="dashed"
+)+geom_vline(xintercept=c(-log2FC_cutoff,log2FC_cutoff),cex=1, colour="darkgrey", linetype="dashed")+theme(legend.title = element_blank())
+print(volcano)
+  }
+
+if(export_form == 'signif'){
+  return(res.sig)
+  } else {
+  return(res.table[order(padj,-log2FoldChange)])
+  }
+}
+```
+
+### define functions to run GO and KEGG respectively
+```{r}
+set.seed(1000)
+
+library(clusterProfiler)
+library(org.Rn.eg.db)
+
+run_GO_rat = function(candidate_gene, background_gene=NULL, gene_format = 'SYMBOL', ontology = 'BP', cutoff=0.05,
+                  showCategory=10,font.size=10,title = 'GO enrichment'){
+  diff_gene_ID<-clusterProfiler::bitr(candidate_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+  if(is.null(background_gene)){
+    ego <-  clusterProfiler::simplify(enrichGO(gene = diff_gene_ID$ENTREZID,  OrgDb = org.Rn.eg.db,
+                    keyType = 'ENTREZID', ont = ontology, readable = T,
+                    pAdjustMethod = "BH", qvalueCutoff  = cutoff, pvalueCutoff  = cutoff))
+  } else{
+    background_gene = clusterProfiler::bitr(background_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+    ego <-  simplify(enrichGO(gene = diff_gene_ID$ENTREZID,  OrgDb = org.Rn.eg.db,
+                              universe = background_gene$ENTREZID,
+                     keyType = 'ENTREZID', ont = ontology, readable = T,
+                     pAdjustMethod = "BH", qvalueCutoff  = cutoff, pvalueCutoff  = cutoff))
+  }
+
+  if(nrow(ego@result)>0){
+    print(enrichplot::dotplot(ego, showCategory = showCategory, font.size = font.size, x='Count',title=title))
+  }
+  return(ego)
+}
+
+```
+
+### define a function to calculate standard error based on standard deviation
+```{r}
+se <- function(x, na.rm = FALSE) {
+ if (na.rm) x <- na.omit(x)
+ sqrt(var(x) / length(x))
+}
+
+std <- function(a) sd(a) / sqrt(length(a))
+```
+
+```{r}
+load('~/Project/sc_Cardiomyocytes/bulk_RNAseq/quant/Rat_cardiac_bulkRNAseq_gene_count_and_Mfuzz_result.RData')
+```
+
+
+## construct DESeq2 object
+```{r}
+library(DESeq2)
+dds = DESeqDataSetFromMatrix(countData = gene_count,
+                             colData = DataFrame(meta.info),
+                             design = ~Group)
+norm_mat = normTransform(dds)
+#gene_fpkm = fpkm(dds)
+group.colors = pal_jama()(4)[c(1,3,2,4)]
+```
+
+## PCA plot
+```{r,fig.width=12,fig.height=7}
+library("factoextra")
+
+gene.var = apply(assay(norm_mat),1,sd)
+summary(gene.var)
+
+
+boxplot(gene.var)
+
+var.genes = names(gene.var[gene.var>0.5])
+
+length(var.genes)
+```
+
+## for-loop
+```{r,fig.width=5,fig.height=5}
+for(i in seq(500,5000,500)){
+
+  mat2use = t(assay(norm_mat)[names(sort(gene.var,decreasing = T))[1:i],-1])
+  MIR_PCA = PCA(mat2use, graph = F)
+  MIR_PCA.res = as.data.frame(MIR_PCA$ind$coord)
+  MIR_PCA.res$ID = rownames(MIR_PCA.res)
+  setDT(MIR_PCA.res)
+  MIR_PCA.res[,Group:=mapply(function(x)x[1],strsplit(ID,'[.]'))]
+  MIR_PCA.res$Group = factor(MIR_PCA.res$Group, levels = unique(MIR_PCA.res$Group))
+  group.colors = c(pal_jama()(4))
+  group.colors = pal_nejm()(4)[c(4,2,3,1)]
+  pca.p = ggscatter(MIR_PCA.res, x = 'Dim.1', y = 'Dim.2', color = 'Group',size = 2) +
+  geom_mark_ellipse(aes(color = as.factor(Group)), expand = unit(0.5,"mm"))+
+  
+  geom_vline(xintercept=c(0),cex=1, colour="black", linetype="dashed")+
+  geom_hline(yintercept=c(0),cex=1, colour="black", linetype="dashed")+
+  labs(x='PC1 (45.5%)', y = 'PC2 (13.5%)',title = paste0(i,' variable genes'))+scale_color_manual(values = group.colors)+
+  my_theme + theme(legend.title = element_blank(),legend.position = 'none')
+  
+  print(pca.p)
+}
+
+
+```
+
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/PCA_plot_of_4_groups_using_5000_variable_genes.pdf',6.5,5)
+print(pca.p)
+dev.off()
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/1120/PCA_plot_of_4_groups_using_5000_variable_genes.pdf',5,5)
+print(pca.p)
+dev.off()
+```
+
+
+## unbiased clustering 
+```{r,fig.width=8.5,fig.height=6}
+dim(mat2use)
+for(i in seq(500,5000,500)){
+   mat2use = t(assay(norm_mat)[names(sort(gene.var,decreasing = T))[1:i],-1])
+MIR_cluster <- hcut(mat2use, k = 3, stand = TRUE)
+
+# Visualize
+ cp = fviz_dend(MIR_cluster, rect = T, horiz = T, cex = 1,lwd=1,repel = T,
+          k_colors = c("#2E9FDF", "#E7B800", "#FC4E07"),main = paste0(i,' variable genes'))
+ print(cp)
+}
+
+
+```
+
+
+```{r}
+i = 1500
+
+mat2use = t(assay(norm_mat)[names(sort(gene.var,decreasing = T))[1:i],-1])
+MIR_cluster <- hcut(mat2use, k = 3, stand = TRUE)
+
+# Visualize
+ cp = fviz_dend(MIR_cluster, rect = T, horiz = T, cex = 1,lwd=1,repel = T,
+          k_colors = c("#2E9FDF", "#E7B800", "#FC4E07"),main = '')
+ 
+ pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/Clustering_tree_plot_of_4_groups_using_1500_variable_genes.pdf',8.5,6)
+ print(cp)
+ dev.off()
+```
+
+## GSVA scores estimation using heart function/disease signature from MIR paper
+```{r}
+library(GSVA)
+set.seed(2022)
+#gene.list = list(Sham_vs_24h.DEG_sig[Group=='Sham']$gene_name[1:200],
+#                 Sham_vs_24h.DEG_sig[Group=='MI 24h']$gene_name[1:200])
+
+heat.signature = fread('~/Project/sc_Cardiomyocytes/MIR/result/DEG/Heart_function_and_disease_gene_signature.txt', header = T, sep = '\t')
+heat.signature
+
+gene.list = list(heat.signature[grep('function',Group)]$gene_name,
+                 heat.signature[grep('disease',Group)]$gene_name)
+
+names(gene.list) = c('Heart function','Heart disease')
+
+toplot = gsva(as.matrix(assay(norm_mat)), gene.list, kcdf="Gaussian",method = "gsva")
+toplot = gsva(as.matrix(assay(norm_mat)), gene.list, kcdf="Poisson",method = "ssgsea")
+head(toplot)
+
+colnames(toplot)
+toplot1 = gsva(as.matrix(assay(norm_mat)[,c(1:2,4,9:12)]), gene.list, kcdf="Gaussian",method = "gsva")
+toplot2 = gsva(as.matrix(assay(norm_mat)[,c(3,5:8,13:16)]), gene.list, kcdf="Gaussian",method = "gsva")
+
+toplot = cbind(toplot1, toplot2)
+
+```
+
+```{r,fig.width=4.5,fig.height=4.5}
+toScatter = data.table(ID = colnames(toplot),
+                       func = as.numeric(toplot[1,]),
+                       disease = as.numeric(toplot[2,]))
+
+toScatter[,Group:=mapply(function(x)x[1],strsplit(ID,'[.]'))]
+toScatter
+#group.colors = pal_jama()(4)[c(1,3,2,4)]
+group.colors = pal_nejm()(4)[c(4,2,3,1)]
+allS = ggplot(toScatter, aes(x = func, y = disease, col = Group)) + geom_point() + 
+   geom_mark_ellipse(aes(color = as.factor(Group)), expand = unit(1,"mm"),size=1)+
+  geom_abline(slope=-1,intercept =0, linetype='dashed',cex=0.7)+xlim(c(-0.9,1)) + ylim(c(-0.9,1))+
+  scale_color_manual(values = group.colors) + labs(x='Heart function scores', y = 'Heart disease scores')+
+  my_theme + theme(legend.position = 'none')
+
+allS
+```
+
+```{r}
+ pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/GSVA_scores_plot_using_MIR_heart_function_and_disease_signature.pdf',4.5,4.5)
+ print(allS)
+ dev.off()
+ 
+pdf('~/Project/sc_Cardiomyocytes/Figures/1120/GSVA_scores_plot_using_MIR_heart_function_and_disease_signature.pdf',4.5,4.5)
+ print(allS)
+ dev.off()
+```
+
+
+## GSVA scores estimation using heart contraction, mechanical force and disease signature
+```{r}
+library(GSVA)
+set.seed(2022)
+
+load('~/Project/sc_Cardiomyocytes/bulk_RNAseq/Hydrogel_bulkRNAseq_interesting_genes.RData')
+
+disease = c("NPPA","NPPB","MYH7","MYH7B","XIRP2","PFKP","CMYA5","ACTA1","TNNI3","ANKRD1")
+disease = paste0(substr(disease,1,1), tolower(substring(disease,2)))
+disease
+
+gene.list = list(cardiac.genes, mechanical.genes, disease)
+
+names(gene.list) = c('Heart contraction', 'Mechanical force', 'Heart disease')
+
+toplot = gsva(as.matrix(assay(norm_mat)), gene.list, kcdf="Gaussian",method = "gsva")
+#toplot = gsva(as.matrix(assay(norm_mat)), gene.list, kcdf="Poisson",method = "ssgsea")
+head(toplot)
+
+colnames(toplot)
+toplot1 = gsva(as.matrix(assay(norm_mat)[,c(1:2,4,9:12)]), gene.list, kcdf="Gaussian",method = "gsva")
+toplot2 = gsva(as.matrix(assay(norm_mat)[,c(3,5:8,13:16)]), gene.list, kcdf="Gaussian",method = "gsva")
+
+toplot = cbind(toplot1, toplot2)
+toplot
+```
+
+
+```{r,fig.width=4.5,fig.height=4.5}
+#group.colors = pal_jama()(4)[c(1,3,2,4)]
+
+toScatter = data.table(ID = colnames(toplot),
+                       func = as.numeric(toplot[1,]),
+                       mecha = as.numeric(toplot[2,]),
+                       disease = as.numeric(toplot[3,]))
+
+toScatter[,Group:=mapply(function(x)x[1],strsplit(ID,'[.]'))]
+toScatter[,color:=plyr::revalue(as.character(Group),
+                               c('MI'=group.colors[1],
+                                 'MI_soft_Gel' = group.colors[2],
+                                 'MI_stiff_Gel' = group.colors[3],
+                                 'Sham' = group.colors[4]))]
+toScatter
+
+
+library(ggforce)
+
+allS = ggplot(toScatter, aes(x = func, y = disease, col = Group)) + geom_point() + 
+   geom_mark_ellipse(aes(color = as.factor(Group)), expand = unit(1,"mm"),size=1)+
+  geom_abline(slope=-1,intercept =0, linetype='dashed',cex=0.7)+xlim(c(-0.9,1)) + ylim(c(-0.9,1))+
+  scale_color_manual(values = group.colors) + labs(x='SHICC', y = 'Cardiac disease')+
+  my_theme + theme(legend.position = 'none')
+
+allS
+```
+
+### 2D scatter plot
+```{r,fig.width=4.5,fig.height=4.5}
+
+HC_vs_MF = ggplot(toScatter, aes(x = func, y = mecha, col = Group)) + geom_point() + 
+   geom_mark_ellipse(aes(color = as.factor(Group)), expand = unit(1,"mm"),size=1)+
+  geom_abline(slope=-1,intercept =0, linetype='dashed',cex=0.7)+xlim(c(-0.9,1)) + ylim(c(-0.9,1))+
+  scale_color_manual(values = group.colors) + labs(x='SHICC', y = 'SHMMS')+
+  my_theme + theme(legend.position = 'none')
+
+HC_vs_MF
+```
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/1120/GSVA_2D_of_cardiac_contraction_and_mechanical_force.pdf',4.5,4.5)
+HC_vs_MF
+dev.off()
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/1120/GSVA_2D_of_cardiac_contraction_and_disease.pdf',4.5,4.5)
+allS
+dev.off()
+```
+
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/GSVA_2D_of_cardiac_contraction_and_mechanical_force.pdf',4.5,4.5)
+HC_vs_MF
+dev.off()
+
+pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/GSVA_2D_of_cardiac_contraction_and_disease.pdf',4.5,4.5)
+allS
+dev.off()
+```
+
+
+
+```{r,eval=FALSE}
+p <- plot_ly(
+  as.data.frame(toScatter), x = ~func, y = ~mecha, z = ~disease, 
+  color = ~Group, colors = group.colors
+  ) %>%
+  add_markers() %>%
+  layout(
+    scene = list(xaxis = list(title = 'Cardiac muscle contraction'),
+        yaxis = list(title = 'Response to mechanical stimulus'),
+        zaxis = list(title = 'Cardiac disease'))
+        )
+
+library(rgl)
+plot3d( 
+  x=toScatter$func, y=toScatter$mecha, z=toScatter$disease, 
+  col = toScatter$color, 
+  type = 's', 
+  radius = .1,
+  xlab="Cardiac muscle contraction", ylab="Response to mechanical stimulus", zlab="Cardiac disease")
+
+toScatter[,2:4]
+```
+
+### 3D scatter plot to show three signatures
+```{r,fig.width=5,fig.height=5}
+#install.packages("scatterplot3d") # Install
+library("scatterplot3d") 
+# Custom colors
+# 1. Source the function
+source('http://www.sthda.com/sthda/RDoc/functions/addgrids3d.r')
+# 2. 3D scatter plot
+s3d = scatterplot3d(as.data.frame(toScatter)[,c(2:4)], pch = 16, color=toScatter$color,type = 'h',box = F,grid = F,
+                     xlab="SHICC", ylab="SHMMS", zlab="Cardiac disease")
+
+# 3. Add grids
+addgrids3d(as.data.frame(toScatter)[,c(2:4)], grid = c("xy"))
+
+legend("top", legend = sort(unique(toScatter$Group)),
+      col =  group.colors, pch = 16, bty = 'n',cex=1,
+      inset = -0.25, xpd = TRUE, horiz = TRUE)
+
+# Add regression plane
+#my.lm <- lm(toScatter$func ~ toScatter$disease + toScatter$mecha)
+#s3d$plane3d(my.lm)
+pdf('~/Project/sc_Cardiomyocytes/Figures/1120/GSVA_3D_scatter_plot.pdf',5,5)
+s3d = scatterplot3d(as.data.frame(toScatter)[,c(2:4)], pch = 16, color=toScatter$color,type = 'h',box = F,grid = F,
+                     xlab="SHICC", ylab="SHMMS", zlab="Cardiac disease")
+
+# 3. Add grids
+addgrids3d(as.data.frame(toScatter)[,c(2:4)], grid = c("xy"))
+
+legend("top", legend = sort(unique(toScatter$Group)),
+      col =  group.colors, pch = 16, bty = 'n',cex=1,
+      inset = -0.25, xpd = TRUE, horiz = TRUE)
+
+dev.off()
+```
+
+## reverse SHICC
+```{r,fig.width=5,fig.height=5}
+to3D = as.data.frame(toScatter)[,c(2:4,6)]
+## notice: must order cells based on function scores, then reverse the scores
+to3D = to3D[order(to3D$func),]
+to3D$func = rev(to3D$func)
+#pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/Rat_bulk_Signature_3D_scatter_plot.pdf',5,5)
+pdf('~/Project/sc_Cardiomyocytes/Figures/1120/Reverse_SHICC_GSVA_3D_scatter_plot.pdf',5,5)
+s3d = scatterplot3d(to3D[,1:3], pch = 16, color=to3D$color,type = 'h',box = F,grid = F,
+                     xlab="SHICC", ylab="SHMMS", zlab="Cardiac disease")
+
+# 3. Add grids
+addgrids3d(to3D[,1:3], grid = c("xy"))
+
+dev.off()
+```
+
+
+## reverse X and Y
+```{r,fig.width=5,fig.height=5}
+s3d = scatterplot3d(as.data.frame(toScatter)[,c(3,2,4)], pch = 16, color=toScatter$color,type = 'h',box = F,grid = F,
+                     ylab="Cardiac muscle contraction", xlab="Response to mechanical stimulus", zlab="Cardiac disease")
+
+# 3. Add grids
+addgrids3d(as.data.frame(toScatter)[,c(3,2,4)])
+
+legend("top", legend = sort(unique(toScatter$Group)),
+      col =  group.colors, pch = 16, bty = 'n',cex=1,
+      inset = -0.25, xpd = T, horiz = TRUE)
+
+```
+
+## using python?
+```{python}
+func=[-0.12433999, -0.69933170, -0.52293981,-0.00225664,  0.51682828,  0.42216965,0.43567981, -0.50967611, -0.53795659,-0.61398705, -0.48727623, -0.58773331,0.61652055,  0.62795191,  0.57788955,0.58517078]
+
+disease = [0.59232804,  0.07764075,  0.44877151,-0.73183033, -0.30584827, -0.29454153,-0.08103349,  0.19956758,  0.61543742,-0.20289754,  0.52421551, -0.03969486,-0.40122358, -0.39646905, -0.35780539,-0.42047629]
+
+mechanical = [0.3238497,  0.4459579,  0.3827110,-0.2750055, -0.3622224, -0.2822023,-0.5541040,  0.2848770,  0.5495699,0.5690500,  0.6111388,  0.3892229,-0.5589047, -0.6041448, -0.5752330,-0.6103165]
+
+cols = ["#374E55FF", "#374E55FF", "#374E55FF","#00A1D5FF", "#00A1D5FF", "#00A1D5FF","#00A1D5FF", "#374E55FF", "#DF8F44FF","#DF8F44FF", "#DF8F44FF", "#DF8F44FF","#B24745FF", "#B24745FF", "#B24745FF","#B24745FF"]
+
+# Creating figure
+fig = plt.figure(figsize = (10, 7))
+ax = plt.axes(projection ="3d")
+ 
+# Creating plot
+ax.scatter3D(mechanical, func, disease, color = cols)
+plt.title("simple 3D scatter plot")
+ 
+# show plot
+plt.show()
+```
+
+
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+fig = plt.figure()
+ax = fig.add_subplot(projection='3d')
+
+n = 100
+
+# For each set of style and range settings, plot n random points in the box
+# defined by x in [23, 32], y in [0, 100], z in [zlow, zhigh].
+for m, zlow, zhigh in [('o', -50, -25), ('^', -30, -5)]:
+    xs = randrange(n, 23, 32)
+    ys = randrange(n, 0, 100)
+    zs = randrange(n, zlow, zhigh)
+    ax.scatter(xs, ys, zs, marker=m)
+
+ax.set_xlabel('X Label')
+ax.set_ylabel('Y Label')
+ax.set_zlabel('Z Label')
+
+plt.show()
+```
+
+
+## pheatmap 
+```{r,fig.width=6,fig.height=6}
+gene.anno = data.frame(gene = c(cardiac.genes, mechanical.genes, disease),
+                       Term = c(rep('Cardiac contraction',length(cardiac.genes)),
+                                rep('Mechanical response',length(mechanical.genes)),
+                                rep('Cardiac disease',length(disease))))
+gene.anno = gene.anno[!duplicated(gene.anno$gene),]
+rownames(gene.anno) = gene.anno$gene
+
+mat2plot = aver_mat[gene.anno$gene,]
+mat2plot = t(scale(t(mat2plot)))
+max(mat2plot)
+min(mat2plot)
+
+mat2plot[mat2plot>1]=1
+mat2plot[mat2plot<(-1)]=-1
+
+pheatmap(mat2plot, cluster_cols = F,cellwidth = 40,fontsize_row = 7,
+         annotation_row = data.frame(row.names = gene.anno$gene,Term=gene.anno$Term),
+         col = colorRampPalette(rev(brewer.pal(n = 7,name ="RdBu")))(100))
+
+pheatmap(mat2plot, cluster_cols = F,cellwidth = 40,show_rownames = F,cluster_rows = T,
+         annotation_row = data.frame(row.names = gene.anno$gene,Term=gene.anno$Term),
+         col = colorRampPalette(rev(brewer.pal(n = 7,name ="RdBu")))(100))
+```
+
+## Complex Heatmap to show three signatures
+```{r,fig.width=5,fig.height=5}
+library(ComplexHeatmap)
+#cell_table = table(meta$CellType)
+#cell_table
+
+gene2show = unique(c(paste0('Myh',6:7),paste0('Npp',c('a','b')),
+              'Xirp2','Ankrd1','Btg2','Dcn','Serpine1','Tgfb1',
+              'Asb15','Dlg1','Ryr2','Tnni3k','Fgf13','Cacna2d1','Casq2'))
+gene.anno$seq = 1:nrow(gene.anno)
+
+mat2use = aver_mat[gene.anno$gene,]
+mat2use = t(scale(t(as.matrix(mat2use))))
+max(mat2use)
+min(mat2use)
+
+mat2use[mat2use>0.7] = 0.7
+mat2use[mat2use<(-0.7)] = -0.7
+
+row_anno = rowAnnotation(foo = anno_mark(at = gene.anno[gene.anno$gene%in%gene2show,]$seq,
+                                         labels = gene.anno[gene.anno$gene%in%gene2show,]$gene))
+
+#col_anno = HeatmapAnnotation(CellType = anno_block(gp = gpar(fill = scales::hue_pal()(6)[1:5])))
+
+# hmcols <- colorRampPalette(c('#9400D3','#363636','#FFFF00'))(100)
+ hmcols <- colorRampPalette(rev(brewer.pal(n = 7,name ="RdBu")))(100)
+ term.colors = pal_simpsons()(3);names(term.colors) = unique(gene.anno$Term)
+ 
+
+ Heatmap(mat2use, name = 'Z-score', cluster_rows = T, cluster_columns = F,col = hmcols,
+         #row_split = gene.anno$Term, use_raster = F,
+         #cluster_row_slices = gene.anno$Term,
+         left_annotation = rowAnnotation(Term=gene.anno$Term, col = list(Term=term.colors)),
+         right_annotation = row_anno, show_row_names = F, show_column_names = T)
+```
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/V2_Rat_bulk_Signature_Heatmaps.pdf',5,5)
+Heatmap(mat2use, name = 'Z-score', cluster_rows = T, cluster_columns = F,col = hmcols,
+         #row_split = gene.anno$Term, use_raster = F,
+         left_annotation = rowAnnotation(Term=gene.anno$Term, col = list(Term=term.colors)),
+         right_annotation = row_anno, show_row_names = F, show_column_names = T)
+dev.off()
+```
+```{r,fig.width=4,fig.height=6}
+ Heatmap(mat2use, name = 'Z-score', cluster_rows = F, cluster_columns = F,col = hmcols,
+         row_split = gene.anno$Term, use_raster = F,
+         #cluster_row_slices = gene.anno$Term,
+         #left_annotation = rowAnnotation(Term=gene.anno$Term, col = list(Term=term.colors)),
+         right_annotation = row_anno, show_row_names = F, show_column_names = T)
+ 
+```
+
+```{r,fig.width=5,fig.height=5.5}
+library(ComplexHeatmap)
+#cell_table = table(meta$CellType)
+#cell_table
+
+gene.anno = data.frame(gene = c(cardiac.genes, mechanical.genes),
+                       Term = c(rep('SHICC',length(cardiac.genes)),
+                                rep('SHMMS',length(mechanical.genes))))
+gene.anno = gene.anno[!duplicated(gene.anno$gene),]
+rownames(gene.anno) = gene.anno$gene
+
+gene2show = unique(c(paste0('Myh',6:7),paste0('Npp',c('a','b')),
+              'Xirp2','Ankrd1','Btg2','Dcn','Serpine1','Tgfb1',
+              'Asb15','Dlg1','Ryr2','Tnni3k','Fgf13','Cacna2d1','Casq2'))
+gene.anno$seq = 1:nrow(gene.anno)
+
+mat2use = aver_mat[gene.anno$gene,]
+mat2use = t(scale(t(as.matrix(mat2use))))
+max(mat2use)
+min(mat2use)
+colnames(mat2use) = c('Sham','MI-Stiff','MI-Soft','MI')
+mat2use[mat2use>0.7] = 0.7
+mat2use[mat2use<(-0.7)] = -0.7
+
+row_anno = rowAnnotation(foo = anno_mark(at = gene.anno[gene.anno$gene%in%gene2show,]$seq,
+                                         labels = gene.anno[gene.anno$gene%in%gene2show,]$gene))
+
+#col_anno = HeatmapAnnotation(CellType = anno_block(gp = gpar(fill = scales::hue_pal()(6)[1:5])))
+
+# hmcols <- colorRampPalette(c('#9400D3','#363636','#FFFF00'))(100)
+ hmcols <- colorRampPalette(rev(brewer.pal(n = 7,name ="RdBu")))(100)
+ hmcols <- colorRampPalette(rev(brewer.pal(n = 7,name ="RdYlBu")))(100)
+ 
+ Heatmap(mat2use, name = 'Z-score', cluster_rows = T, cluster_columns = F,col = hmcols,
+         row_split = gene.anno$Term, use_raster = F,#clustering_method_rows = "ward.D",
+         right_annotation = row_anno, show_row_names = F, show_column_names = T)
+```
+
+```{r}
+ hmcols <- colorRampPalette(rev(brewer.pal(n = 7,name ="RdBu")))(100)
+ 
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig3/Fig3I_Rat_bulk_Signature_Heatmaps.pdf',5,5.5)
+ Heatmap(mat2use, name = 'Z-score', cluster_rows = T, cluster_columns = F,col = hmcols,
+         row_split = gene.anno$Term, use_raster = F,#clustering_method_rows = "ward.D",
+         right_annotation = row_anno, show_row_names = F, show_column_names = T)
+dev.off()
+
+hmcols <- colorRampPalette(rev(brewer.pal(n = 7,name ="RdYlBu")))(100)
+pdf('~/Project/sc_Cardiomyocytes/Figures/Fig3/V2_Fig3I_Rat_bulk_Signature_Heatmaps.pdf',5,5.5)
+ Heatmap(mat2use, name = 'Z-score', cluster_rows = T, cluster_columns = F,col = hmcols,
+         row_split = gene.anno$Term, use_raster = F,#clustering_method_rows = "ward.D",
+         right_annotation = row_anno, show_row_names = F, show_column_names = T)
+dev.off()
+```
+
+
+## DEG analysis between Sham vs MI 
+```{r}
+head(meta.info)
+
+Sham_vs_MI.DEG = run_DESeq2_pipeline(gene_count[,c(1:4,13:16)], meta[c(1:4,13:16),],
+                                     group1 = 'Sham',group2 = 'MI', 
+                                     plot_MA = T, export_form = 'all')
+```
+
+```{r}
+Sham_vs_MI.DEG[gene_name%in%c('Ppara',gene.list[[1]])]
+```
+
+### volcano plots
+```{r,fig.width=6,fig.height=5}
+Sham_vs_MI.DEG$Group = 'Stable'
+Sham_vs_MI.DEG[log2FoldChange>log2(2)&padj<0.05]$Group = 'cKO'
+Sham_vs_MI.DEG[log2FoldChange<(-log2(2))&padj<0.05]$Group = 'WT'
+table(Sham_vs_MI.DEG$Group)
+
+Sham_vs_MI.DEG[,Group:=factor(Group,levels = c('cKO','WT','Stable'))]
+
+Sham_vs_MI.DEG[,logFDR:=-log10(padj)]
+toplot = Sham_vs_MI.DEG[is.finite(log2FoldChange)][is.finite(padj)]
+summary(toplot$logFDR)
+summary(toplot$log2FoldChange)
+
+high = nrow(Sham_vs_MI.DEG[log2FoldChange>log2(2)&padj<0.05])
+low = nrow(Sham_vs_MI.DEG[log2FoldChange<(-log2(2))&padj<0.05])
+
+volcano_DEG <- ggplot(toplot,
+                aes(x=log2FoldChange,y=logFDR, color=Group)
+      )+geom_point(alpha=1,shape=16
+      )+scale_color_manual(values=c("#de4f48","#4979B6",'#363636')
+      )+labs(x="log2(Sham/MI)",
+             y="-log10(FDR)", title = ''
+      ) + xlim(c(-10,10))+ ylim(c(0,75))
+ 
+volcano_DEG = volcano_DEG+geom_hline(yintercept=-log10(0.05), cex=1, colour="darkgrey", linetype="dashed"
+)+geom_vline(xintercept=c(-log2(2),log2(2)),cex=1, colour="darkgrey", linetype="dashed")+
+  my_theme+theme(legend.title = element_blank(),legend.position = 'none') + 
+  annotate('text',x=5,y=70,label=paste0('Up-regulated\n(n=',high,')'),color='black',size=5)+
+  annotate('text',x=-5,y=70,label=paste0('Down-regulated\n(n=',low,')'),color='black',size=5)
+
+print(volcano_DEG)
+```
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/Fig3F_Volcano_plot_between_Sham_vs_MI.pdf',5.5,5)
+volcano_DEG
+dev.off()
+```
+
+
+## heatmaps of DEGs
+```{r,fig.width=5.5,fig.height=5.5}
+head(aver_mat)
+
+mat2plot = aver_mat[Sham_vs_MI.DEG[abs(log2FoldChange)>log2(2)&padj<0.05][order(log2FoldChange)]$gene_name,]
+
+mat2plot = t(scale(t(mat2plot)))
+max(mat2plot)
+min(mat2plot)
+
+mat2plot[mat2plot>1]=1
+mat2plot[mat2plot<(-1)] = -1
+
+pheatmap(mat2plot,angle_col = 45,cluster_cols = F,
+         main = 'DEGs between Sham vs MI',cluster_rows = T,
+         clustering_method = 'ward.D2',cellwidth = 45,
+         fontsize = 12,fontsize_col = 12,show_rownames = F)
+
+```
+
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/Fig3G_heatmaps_of_DEGs_between_Sham_vs_MI.pdf',5.5,5.5)
+pheatmap(mat2plot,angle_col = 45,cluster_cols = F,
+         main = 'DEGs between Sham vs MI',cluster_rows = T,
+         clustering_method = 'ward.D2',cellwidth = 45,
+         fontsize = 12,fontsize_col = 12,show_rownames = F)
+dev.off()
+```
+
+## heatmaps of Ppara signatures
+```{r,fig.width=6,fig.height=12}
+head(aver_mat)
+
+mat2plot = aver_mat[gene.list[[1]],]
+
+mat2plot = t(scale(t(mat2plot)))
+max(mat2plot)
+min(mat2plot)
+
+mat2plot[mat2plot>1]=1
+mat2plot[mat2plot<(-1)] = -1
+
+pheatmap(mat2plot,angle_col = 45,cluster_cols = F,
+         main = 'Ppara signature',
+         clustering_method = 'ward.D2',cellwidth = 45,
+         fontsize = 12,fontsize_col = 12,fontsize_row = 7)
+
+```
+
+```{r,fig.width=5.5,fig.height=5}
+head(aver_mat)
+
+gene2show = c('Ppara','Ppargc1a','Ryr2','Angpt2','Btg2','Csrp3','Nfkbia','Nppa','Piezo1','Piezo2','Myh6','Myh7',
+              'Ankrd1','Nppb','Piezo1','Mylk3','Tnni3k','Asb15')
+
+mat2plot = aver_mat[rownames(aver_mat)%in%gene2show,]
+
+mat2plot = na.omit(t(scale(t(mat2plot))))
+max(mat2plot)
+min(mat2plot)
+
+mat2plot[mat2plot>1]=1
+mat2plot[mat2plot<(-1)] = -1
+
+pheatmap(mat2plot,angle_col = 45,cluster_cols = F,
+         main = '',
+         clustering_method = 'ward.D2',cellwidth = 45,
+         fontsize = 12,fontsize_col = 12,fontsize_row = 12)
+
+```
+
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/Figures/bulkRNAseq/Heatmap_to_show_interesting_genes.pdf',5.5,5)
+pheatmap(mat2plot,angle_col = 45,cluster_cols = F,
+         main = '',
+         clustering_method = 'ward.D2',cellwidth = 45,
+         fontsize = 12,fontsize_col = 12,fontsize_row = 12)
+dev.off()
+```
+

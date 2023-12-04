@@ -1,0 +1,499 @@
+---
+title: "CM_downstream_SubCluster_analysis"
+author: "HuangFei"
+date: "2023/10/13"
+output: html_document
+---
+
+## Load dependence
+```{r,warning=FALSE,results='hide'}
+options(stringsAsFactors = F)
+library(ggplot2)
+library(ggpubr)
+library(tibble)
+library(data.table)
+library(ggsci)
+library(RColorBrewer)
+library(GSVA)
+library(Seurat)
+library(scales)
+
+my_theme <- theme(plot.title = element_text(hjust = 0.5, size = 20),
+                  legend.position = 'right',
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=15),
+                  axis.title.x = element_text(size=15),
+                  axis.title.y = element_text(size=15),
+                  axis.text.y  = element_text(size=15),
+                  panel.border = element_blank(),
+                  axis.line.x = element_line(size=0.25, color="black"),
+                  axis.line.y = element_line(size=0.25, color="black"),
+                  panel.grid.minor.x = element_blank(), panel.grid.minor.y = element_blank(),
+                  panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank(),
+                  panel.background = element_rect(fill='white'),
+                  legend.key=element_blank(),
+                  strip.text.x = element_text(size=15),
+                  strip.text.y = element_text(size=15),
+                  strip.background = element_rect(colour = 'white', fill = 'white'))
+```
+
+```{r}
+load('~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_CM_obj.RData')
+load('~/project/sc_Cardiomyocytes/bulk_RNAseq/Hydrogel_bulkRNAseq_interesting_genes.RData')
+
+cardiac.genes = intersect(cardiac.genes,rownames(CM_seurat))
+mechanical.genes = intersect(mechanical.genes,rownames(CM_seurat))
+```
+
+
+```{r,fig.width=10,fig.height=4}
+CM_seurat <- FindClusters(CM_seurat, resolution = 0.15)
+group.colors = pal_nejm()(4)[c(4,2,3,1)]
+
+umap_cluster = DimPlot(CM_seurat, label = TRUE) + 
+  labs(x='UMAP 1', y ='UMAP 2', title = '')+my_theme
+umap_group = DimPlot(CM_seurat, label = F, reduction = 'umap',group.by = 'Group') + 
+  scale_color_manual(values = group.colors)+labs(x='UMAP 1', y ='UMAP 2', title = '')+my_theme
+
+tsne_cluster = TSNEPlot(CM_seurat, label = T) + 
+  labs(x='t-SNE 1', y ='t-SNE 2', title = '')+my_theme
+tsne_group = DimPlot(CM_seurat, label = F, reduction = 'tsne',group.by = 'Group') + 
+  scale_color_manual(values = group.colors) +  labs(x='t-SNE 1', y ='t-SNE 2', title = '') +my_theme
+library(cowplot)
+plot_grid(umap_cluster,umap_group,ncol=2)
+plot_grid(tsne_cluster,tsne_group,ncol=2)
+```
+
+
+## GSVA analysis
+```{r}
+gene.list = list(cardiac.genes,mechanical.genes,lipid_oxidation,lipid_transport,
+                 icosanoid,contraction,glycolysis,TCA_cycle,mechanical)
+
+names(gene.list) = c('SHICC','SHMMS','lipid oxidation','lipid transport','icosanoid',
+                     'Heart contraction','glycolysis','TCA',"response to mechanical stimulus")
+```
+
+```{r}
+library(GSVA)
+set.seed(123)
+
+meth = 'gsva'
+
+if(meth=='gsva'){
+  CM.mat = CM_seurat@assays$RNA@data
+  CM.mat = as.matrix(CM.mat[rownames(CM.mat)%in%unique(unlist(gene.list)),])
+  CM.GSVA <- gsva(CM.mat, gset.idx.list = gene.list, kcdf="Gaussian",method = "gsva", parallel.sz=1)
+
+}else{
+  CM.mat = CM_seurat@assays$RNA@data
+  CM.mat = as.matrix(CM.mat[rownames(CM.mat)%in%unique(unlist(gene.list)),])
+  CM.GSVA <- gsva(CM.mat, gset.idx.list = gene.list, kcdf="Poisson",
+                  method = "ssgsea", parallel.sz=1)
+}
+
+```
+
+## assign CM sub-cluster
+```{r}
+CM.meta = CM_seurat@meta.data
+table(CM.meta$seurat_clusters)
+CM.meta$SubCluster = plyr::revalue(CM.meta$seurat_clusters,
+                                    c('0'='CM1','1'='CM1','2'='CM2','3'='CM2','4'='CM3'))
+table(CM.meta$SubCluster)
+CM.meta -> CM_seurat@meta.data
+```
+
+
+## cluster fraction/percentage per group
+```{r,fig.width=8,fig.height=5}
+library(ggpubr)
+#CM_seurat@meta.data$Group = factor(CM_seurat@meta.data$Group, levels = c('Sham','MI 1h (R)','MI 6h (R)','MI 24h'))
+CM.meta = CM_seurat@meta.data
+
+head(CM.meta)
+cell_table = as.data.frame(with(CM.meta, table(Group, SubCluster)))
+
+cell_table
+setDT(cell_table)
+cell_per = cell_table[,100*Freq/sum(Freq), by = .(Group)]
+cell_per$CellType = rep(unique(cell_table$SubCluster),4)
+
+cell_per
+
+compo_bar1 = ggbarplot(cell_per, x = 'Group', y = 'V1', fill = 'CellType',
+        position = position_stack(), rotate = TRUE,width = 0.7,palette = sub.colors) + 
+  labs( x ='',y='Percentage of cells (%)')  + my_theme + theme(legend.title = element_blank(),
+                                                              legend.position = 'right')
+
+compo_bar1
+
+
+```
+
+### Group percentage per cluster
+```{r,fig.width=8,fig.height=4}
+library(ggpubr)
+
+cell_table = as.data.frame(with(CM.meta, table(SubCluster,Group)))
+
+cell_table
+setDT(cell_table)
+cell_per = cell_table[,100*Freq/sum(Freq), by = .(SubCluster)]
+cell_per$Group = rep(unique(cell_table$Group),3)
+
+cell_per
+
+compo_bar2 = ggbarplot(cell_per, x = 'SubCluster', y = 'V1', fill = 'Group',
+        position = position_stack(), rotate = TRUE,width = 0.7) + 
+  scale_fill_manual(values = pal_nejm(alpha = 0.8)(4)[c(4,2,3,1)])+
+  labs( x ='',y='Percentage of cells (%)')  + my_theme + theme(legend.title = element_blank(),
+                                                              legend.position = 'right')
+
+compo_bar2
+```
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/celltype/SubCluster_percentage_across_groups.pdf',8,5)
+compo_bar1
+dev.off()
+
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/celltype/Group_percentage_across_SubCluster.pdf',8,5)
+compo_bar2
+dev.off()
+```
+
+```{r,fig.width=10,fig.height=4}
+CM_seurat <- FindClusters(CM_seurat, resolution = 0.15)
+group.colors = pal_nejm()(4)[c(4,2,3,1)]
+
+umap_cluster = DimPlot(CM_seurat, label = TRUE,group.by = 'SubCluster',cols = sub.colors) + 
+  labs(x='UMAP 1', y ='UMAP 2', title = '')+my_theme
+umap_group = DimPlot(CM_seurat, label = F, reduction = 'umap',group.by = 'Group') + 
+  scale_color_manual(values = group.colors)+labs(x='UMAP 1', y ='UMAP 2', title = '')+my_theme
+
+tsne_cluster = TSNEPlot(CM_seurat, label = T,group.by = 'SubCluster') + 
+  scale_color_manual(values = sub.colors) + labs(x='t-SNE 1', y ='t-SNE 2', title = '')+my_theme
+tsne_group = DimPlot(CM_seurat, label = F, reduction = 'tsne',group.by = 'Group') + 
+  scale_color_manual(values = group.colors) +  labs(x='t-SNE 1', y ='t-SNE 2', title = '') +my_theme
+library(cowplot)
+plot_grid(umap_cluster,umap_group,ncol=2)
+plot_grid(tsne_cluster,tsne_group,ncol=2)
+```
+
+```{r}
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/celltype/CM_SubCluster_tSNE.pdf',10,4)
+plot_grid(tsne_cluster,tsne_group,ncol=2)
+dev.off()
+```
+
+### melt the matrix of GSVA scores
+```{r,fig.width=5,fig.height=4.8}
+library(scales)
+CM.GSVA.mat = t(apply(CM.GSVA,1,rescale))
+
+CM.GSVA.melt = melt(as.matrix(CM.GSVA.mat))
+colnames(CM.GSVA.melt)[1:2] = c('gene','cellID')
+
+CM.meta = CM_seurat@meta.data
+CM.meta$cellID = rownames(CM.meta)
+CM.GSVA.melt = merge(CM.GSVA.melt, CM.meta[,c('cellID','Group','seurat_clusters','SubCluster')], by = 'cellID')
+
+setDT(CM.GSVA.melt)
+CM.GSVA.melt
+sort(unique(CM.GSVA.melt$Group))
+
+```
+
+### Sub-cluster levels
+```{r,fig.width=5,fig.height=4.8}
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/CM/GSVA_violin_plots_across_SubCluster.pdf',5,4.8)
+sub.colors = hue_pal()(5)[c(1,3,4)]
+
+for(i in names(gene.list)){
+  vp = ggviolin(CM.GSVA.melt[gene == i], x = 'SubCluster', y = 'value',fill = 'SubCluster',
+                trim = T,palette =  sub.colors) +
+    geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('CM1','CM2'),c('CM2','CM3')),font.label=list(size=14))+
+  labs(x = '', y = 'GSVA scores', title = i) +#  coord_cartesian(ylim=c(0,10)) 
+   my_theme + theme(legend.position = 'none')
+  print(vp)
+}
+dev.off()
+```
+
+### Group levels
+```{r}
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/CM/GSVA_violin_plots_across_Group.pdf',5,4.8)
+for(i in names(gene.list)){
+  vp = ggviolin(CM.GSVA.melt[gene == i], x = 'Group', y = 'value',fill = 'Group',
+                palette = pal_nejm()(4)[c(4,2,3,1)],trim = T) +
+    geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI','Sham'),c('MI','MI_soft'),c('MI','MI_stiff')),font.label=list(size=14))+
+  labs(x = '', y = 'GSVA scores', title = i) +#  coord_cartesian(ylim=c(0,10)) 
+   my_theme + theme(legend.position = 'none')
+  print(vp)
+}
+dev.off()
+```
+
+
+## seurat clusters
+```{r}
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/CM/GSVA_violin_plots_across_seurat_clusters.pdf',5,4.8)
+for(i in names(gene.list)){
+  vp = ggviolin(CM.GSVA.melt[gene == i], x = 'seurat_clusters', y = 'value',fill = 'seurat_clusters',trim = T) +
+    geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  labs(x = '', y = 'GSVA scores', title = i) +#  coord_cartesian(ylim=c(0,10)) 
+   my_theme + theme(legend.position = 'none')
+  print(vp)
+}
+dev.off()
+```
+
+
+```{r}
+save(CM_seurat, CM.GSVA, CM.GSVA.melt,gene.list, file = '~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/CM_SubClusters.RData')
+```
+
+
+## select presentative genes to show in paper
+```{r}
+cell.markers = fread('~/Project/sc_Cardiomyocytes/snRNAseq/result/CellType_markers.txt',
+                     header = T, sep = '\t')
+
+cell.markers
+```
+
+```{r,fig.width=9,fig.height=7.5}
+VlnPlot(CM_seurat,c('Myh6','Myh7','Ryr2','Fgf13','Asb15','Tnni3k','Ankrd1','Nppa','Nppb'),
+        ncol = 3, group.by = 'SubCluster', cols = sub.colors, pt.size = 0)
+
+```
+
+
+```{r,fig.width=10,fig.height=7.5}
+VlnPlot(CM_seurat,c('Myh6','Myh7','Ryr2','Fgf13','Asb15','Tnni3k','Ankrd1','Nppa','Nppb'),
+        ncol = 3, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0)
+
+VlnPlot(C4,c('Myh6','Myh7','Ryr2','Fgf13','Asb15','Tnni3k','Ankrd1','Nppa','Nppb'),
+        ncol = 3, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0)
+```
+
+
+
+```{r,fig.width=4,fig.height=3.5}
+
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/Vln/Cardiac_genes_CM_SubCluster_Vln.pdf',4,3.5)
+  Fgf13 = VlnPlot(CM_seurat,'Fgf13', ncol = 1, group.by = 'SubCluster', cols = sub.colors, pt.size = 0,y.max = 7)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('CM1','CM2'),c('CM2','CM3')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+  
+  Asb15 = VlnPlot(CM_seurat,'Asb15', ncol = 1, group.by = 'SubCluster', cols = sub.colors, pt.size = 0,y.max = 5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('CM1','CM2'),c('CM2','CM3')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+
+  print(Fgf13)
+  print(Asb15)
+  
+  
+for(i in c('Ryr2','Myh6','Myh7','Tnni3k','Ankrd1','Nppa')){
+  vl = VlnPlot(CM_seurat,i, ncol = 1, group.by = 'SubCluster', cols = sub.colors, pt.size = 0,y.max = 9)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('CM1','CM2'),c('CM2','CM3')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+  print(vl)
+  assign(i,vl)
+}
+
+Nppb = VlnPlot(CM_seurat,'Nppb', ncol = 1, group.by = 'SubCluster', cols = sub.colors, pt.size = 0,y.max = 6)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('CM1','CM2'),c('CM2','CM3')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Nppb)
+dev.off()
+```
+
+```{r,fig.width=12,fig.height=9}
+plot_grid(Myh6,Myh7,Ryr2,
+          Asb15,Fgf13,Tnni3k,
+          Ankrd1,Nppa,Nppb,ncol = 3)
+
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/Cardiac_genes_CM_SubCluster_Vln.pdf',10,9)
+plot_grid(Myh6,Myh7,Ryr2,
+          Asb15,Fgf13,Tnni3k,
+          Ankrd1,Nppa,Nppb,ncol = 3)
+dev.off()
+```
+
+```{r,fig.width=4,fig.height=3.5}
+ Tnni3k = VlnPlot(CM_seurat,'Tnni3k', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 6)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 't.test')+
+    theme(legend.position = 'none')
+
+print(Tnni3k)
+```
+
+## across whole CM Groups
+```{r,fig.width=4,fig.height=3.5}
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/Vln/Cardiac_genes_across_CM_Group_Vln.pdf',4,3.5)
+  Fgf13 = VlnPlot(CM_seurat,'Fgf13', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 7)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+  
+  Asb15 = VlnPlot(CM_seurat,'Asb15', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 4.5)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 't.test')+
+    theme(legend.position = 'none')
+
+
+  print(Fgf13)
+  print(Asb15)
+  
+  Ryr2 = VlnPlot(CM_seurat,'Ryr2', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 9)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 't.test')+
+    theme(legend.position = 'none')
+
+print(Ryr2)
+
+  Myh6 = VlnPlot(CM_seurat,'Myh6', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 8)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Myh6)
+
+for(i in c('Myh7')){
+  vl = VlnPlot(CM_seurat,i, ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 8)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+  print(vl)
+  assign(i,vl)
+}
+
+  
+  Ankrd1 = VlnPlot(CM_seurat,'Ankrd1', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 9)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Ankrd1)
+
+
+ Tnni3k = VlnPlot(CM_seurat,'Tnni3k', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 6)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 't.test')+
+    theme(legend.position = 'none')
+
+print(Tnni3k)
+
+  Nppa = VlnPlot(CM_seurat,'Nppa', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 7.5)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Nppa)
+
+Nppb = VlnPlot(CM_seurat,'Nppb', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 7)+
+        geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Nppb)
+dev.off()
+```
+
+## across CM3 groups
+```{r,fig.width=4,fig.height=3.5}
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/Vln/Cardiac_genes_CM3_Group_Vln.pdf',4,3.5)
+  Fgf13 = VlnPlot(C4,'Fgf13', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 5.5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+  
+  Asb15 = VlnPlot(C4,'Asb15', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 4.5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+
+  print(Fgf13)
+  print(Asb15)
+  
+  Ryr2 = VlnPlot(C4,'Ryr2', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 6.5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Ryr2)
+
+  Myh6 = VlnPlot(C4,'Myh6', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 6.5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Myh6)
+
+for(i in c('Myh7')){
+  vl = VlnPlot(C4,i, ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 6)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+  print(vl)
+  assign(i,vl)
+}
+
+  
+  Ankrd1 = VlnPlot(C4,'Ankrd1', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 7)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Ankrd1)
+
+
+  Tnni3k = VlnPlot(C4,'Tnni3k', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Tnni3k)
+
+  Nppa = VlnPlot(C4,'Nppa', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Nppa)
+
+Nppb = VlnPlot(C4,'Nppb', ncol = 1, group.by = 'Group', cols = pal_nejm()(4)[c(4,2,3,1)], pt.size = 0,y.max = 5)+
+        geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI_soft','MI_stiff'),c('MI','MI_stiff')),method = 'wilcox.test')+
+    theme(legend.position = 'none')
+
+print(Nppb)
+dev.off()
+```
+
+
+```{r,fig.width=12,fig.height=10}
+plot_grid(Myh6,Myh7,Ryr2,
+          Asb15,Fgf13,Tnni3k,
+          Ankrd1,Nppa,Nppb,ncol = 3)
+
+pdf('~/Project/sc_Cardiomyocytes/snRNAseq/figure/CM/Cardiac_genes_CM3_Group_Vln.pdf',12,10)
+plot_grid(Myh6,Myh7,Ryr2,
+          Asb15,Fgf13,Tnni3k,
+          Ankrd1,Nppa,Nppb,ncol = 3)
+dev.off()
+```
+

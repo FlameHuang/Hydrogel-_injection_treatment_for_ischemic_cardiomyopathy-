@@ -1,0 +1,401 @@
+---
+title: "Hydrogel_FB_SubCluster_analysis"
+author: "HuangFei"
+date: "2023/10/12"
+output: html_document
+---
+
+### load dependence
+```{r}
+library(data.table)
+library(Seurat)
+library(ggsci)
+library(cowplot)
+library(ggplot2)
+library(sctransform)
+library(ggpubr)
+library(harmony)
+library(scCustomize)
+
+my_theme <- theme(plot.title = element_text(hjust = 0.5, size = 17),
+                  legend.position = 'right',
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=16),
+                  axis.title.x = element_text(size=16),
+                  axis.title.y = element_text(size=16),
+                  axis.text.y  = element_text(size=16),
+                  panel.border = element_blank(),
+                  axis.line.x = element_line(size=0.25, color="black"),
+                  axis.line.y = element_line(size=0.25, color="black"),
+                  panel.grid.minor.x = element_blank(), panel.grid.minor.y = element_blank(),
+                  panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank(),
+                  panel.background = element_rect(fill='white'),
+                  legend.key=element_blank(),
+                  strip.text.x = element_text(size=15),
+                  strip.text.y = element_text(size=15),
+                  strip.background = element_rect(colour = 'white', fill = 'white'))
+
+```
+
+```{r}
+load('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_harmony_snRNAseq.RData')
+load('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/Hydrogel_Treatment/result/Hydrogel_bulkRNAseq_interesting_genes.RData')
+
+Idents(hydrogel) = 'CellType'
+cell.markers = FindAllMarkers(hydrogel, only.pos = T, logfc.threshold = 0.1)
+setDT(cell.markers)
+
+write.table(cell.markers,row.names = F,quote = F,sep = '\t',
+            file = '~/project/sc_Cardiomyocytes/snRNAseq/result/CellType_markers.txt')
+
+cell.markers[gene%in%cardiac.genes]
+cell.markers[gene%in%mechanical.genes]
+```
+
+
+## GSVA score comparison across different cell-types
+```{r}
+library(GSVA)
+set.seed(123)
+
+gene.list = list(SHICC = cardiac.genes, SHMMS = mechanical.genes)
+
+meth = 'gsva'
+
+  mat = hydrogel@assays$RNA@data
+  mat = as.matrix(mat[rownames(mat)%in%unique(unlist(gene.list)),])
+  GSVA.mat <- gsva(mat, gset.idx.list = gene.list, kcdf="Gaussian",method = "gsva", parallel.sz=1)
+
+
+scale.GSVA.mat = t(apply(GSVA.mat,1,rescale))
+
+hydrogel@assays$RNA@data = rbind(hydrogel@assays$RNA@data, scale.GSVA.mat)
+
+cell.colors = c(pal_jama()(6)[c(4,2,5,3,6)],scales::hue_pal()(2),pal_jama()(1))
+
+SHICC = VlnPlot(hydrogel,c('SHICC'),group.by = 'CellType', ncol = 1,cols = cell.colors, pt.size = 0)+geom_boxplot(width=0.15,fill='white',outlier.shape = NA) +
+  labs(x='',y='GSVA scores')+theme(legend.position = 'none')
+
+SHMMS = VlnPlot(hydrogel,c('SHMMS'),group.by = 'CellType', ncol = 1,cols = cell.colors, pt.size = 0)+geom_boxplot(width=0.15,fill='white',outlier.shape = NA) +
+  labs(x='',y='GSVA scores')+theme(legend.position = 'none')
+
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/SHICC_and_SHMMS_GSVA_Vln_across_CellType.pdf',7,6)
+plot_grid(SHICC, SHMMS, ncol = 1)
+dev.off()
+```
+
+## re-cluster of FB
+```{r}
+FB.list = SplitObject(FB_seurat,split.by = 'Group')
+
+names(FB.list)
+
+
+FB.list <- lapply(X = FB.list, FUN = function(x) {
+    x <- NormalizeData(x, verbose = FALSE)
+    x <- FindVariableFeatures(x, verbose = FALSE)
+})
+
+```
+
+
+## select and scale variable features in integration 
+```{r}
+features <- SelectIntegrationFeatures(object.list = FB.list)
+FB.list <- lapply(FB.list, FUN = function(x) {
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+```
+
+## Find integration anchors
+```{r}
+anchors <- FindIntegrationAnchors(object.list = FB.list,
+                                  reduction = "rpca",dims = 1:30)
+```
+
+## integrate multiple datasets
+```{r}
+FB_seurat <- IntegrateData(anchorset = anchors, dims = 1:30)
+FB_seurat <- ScaleData(FB_seurat, verbose = F)
+```
+
+
+## PC selections
+#### heatmaps of PCs
+```{r, fig.height=8,fig.width=9}
+FB_seurat = RunPCA(FB_seurat)
+DimHeatmap(FB_seurat, dims = 1:15, cells = 500, balanced = TRUE,reduction = 'pca')
+DimHeatmap(FB_seurat, dims = 16:30, cells = 500, balanced = TRUE,reduction = 'pca')
+```
+
+### variation and standard deviation of PCs
+```{r,fig.width=6,fig.height=5}
+ElbowPlot(FB_seurat, ndims = 20,reduction = 'pca')
+```
+
+## dimension reduction and clustering
+```{r,fig.width=10,fig.height=4}
+dims = 1:15
+#dims = 1:12
+
+DefaultAssay(FB_seurat) = 'integrated'
+FB_seurat <- RunUMAP(FB_seurat, reduction = 'pca', dims=dims)
+
+FB_seurat <- RunTSNE(FB_seurat, reduction = 'pca', dims=dims,check_duplicates = FALSE)
+FB_seurat <- FindNeighbors(FB_seurat, reduction = 'pca', dims=dims)
+### from 0.3 to 0.1
+FB_seurat <- FindClusters(FB_seurat, resolution = 0.15)
+```
+
+
+## Harmony PC selections
+#### heatmaps of PCs
+```{r, fig.height=8,fig.width=9}
+FB_seurat = subset(hydrogel, CellType == 'FB')
+table(FB_seurat$Group)
+DefaultAssay(FB_seurat) = 'RNA'
+FB_seurat = RunPCA(FB_seurat,npcs = 50)
+FB_seurat = harmony::RunHarmony(FB_seurat,group.by.vars = 'Group')
+
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FB')
+pdf('PC_heatmaps.pdf',7.5,7.5)
+DimHeatmap(FB_seurat, dims = 1:15, cells = 500, balanced = TRUE,reduction = 'harmony')
+DimHeatmap(FB_seurat, dims = 16:30, cells = 500, balanced = TRUE,reduction = 'harmony')
+dev.off()
+```
+
+### variation and standard deviation of PCs
+```{r,fig.width=6,fig.height=5}
+pdf('PC_selection.pdf',7.5,7.5)
+ElbowPlot(FB_seurat, ndims = 30,reduction = 'harmony')
+dev.off()
+```
+
+## dimension reduction and clustering
+```{r,fig.width=10,fig.height=4}
+dims = 1:20
+FB_seurat <- RunUMAP(FB_seurat, reduction = 'harmony', dims=dims)
+
+FB_seurat <- RunTSNE(FB_seurat, reduction = 'harmony', dims=dims,check_duplicates = FALSE)
+FB_seurat <- FindNeighbors(FB_seurat, reduction = 'harmony', dims=dims)
+### from 0.3 to 0.1
+#FB_seurat <- FindClusters(FB_seurat, resolution = 0.2)
+FB_seurat <- FindClusters(FB_seurat, resolution = 0.2)
+
+```
+
+```{r}
+group.colors = pal_nejm()(4)[c(4,2,3,1)]
+
+umap_cluster = DimPlot(FB_seurat, label = TRUE) + 
+  labs(x='UMAP 1', y ='UMAP 2', title = '')+my_theme
+
+umap_group = DimPlot(FB_seurat, label = F, reduction = 'umap',group.by = 'Group') + 
+  scale_color_manual(values = group.colors)+labs(x='UMAP 1', y ='UMAP 2', title = '')+my_theme
+
+tsne_cluster = TSNEPlot(FB_seurat, label = T) + 
+  labs(x='t-SNE 1', y ='t-SNE 2', title = '')+my_theme
+
+tsne_group = DimPlot(FB_seurat, label = F, reduction = 'tsne',group.by = 'Group') + 
+  scale_color_manual(values = group.colors) +  labs(x='t-SNE 1', y ='t-SNE 2', title = '') +my_theme
+```
+
+
+
+
+```{r,fig.width=10,fig.height=4}
+library(cowplot)
+pdf('Harmony_umap.pdf',10,4)
+plot_grid(umap_cluster,umap_group,ncol=2)
+dev.off()
+
+pdf('Harmony_tsne.pdf',10,4)
+plot_grid(tsne_cluster,tsne_group,ncol=2)
+dev.off()
+```
+
+
+## cluster fraction/percentage per group
+```{r,fig.width=8,fig.height=5}
+library(ggpubr)
+#FB_seurat@meta.data$Group = factor(FB_seurat@meta.data$Group, levels = c('Sham','MI 1h (R)','MI 6h (R)','MI 24h'))
+FB.meta = FB_seurat@meta.data
+
+head(FB.meta)
+cell_table = as.data.frame(with(FB.meta, table(Group, seurat_clusters)))
+
+cell_table
+setDT(cell_table)
+cell_per = cell_table[,100*Freq/sum(Freq), by = .(Group)]
+cell_per$CellType = rep(unique(cell_table$seurat_clusters),4)
+
+cell_per
+
+compo_bar1 = ggbarplot(cell_per, x = 'Group', y = 'V1', fill = 'CellType',
+        position = position_stack(), rotate = TRUE,width = 0.7) + 
+  labs( x ='',y='Percentage of cells (%)')  + my_theme + theme(legend.title = element_blank(),
+                                                              legend.position = 'right')
+
+
+
+
+cell_table = as.data.frame(with(FB.meta, table(seurat_clusters,Group)))
+
+cell_table
+setDT(cell_table)
+cell_per = cell_table[,100*Freq/sum(Freq), by = .(seurat_clusters)]
+cell_per$Group = rep(unique(cell_table$Group),5)
+
+cell_per
+
+compo_bar2 = ggbarplot(cell_per, x = 'seurat_clusters', y = 'V1', fill = 'Group',
+        position = position_stack(), rotate = TRUE,width = 0.7) + 
+  scale_fill_manual(values = pal_nejm(alpha = 0.8)(4)[c(4,2,3,1)])+
+  labs( x ='',y='Percentage of cells (%)')  + my_theme + theme(legend.title = element_blank(),
+                                                              legend.position = 'right')
+
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FB/SubCluster_percentage_across_groups.pdf',8,5)
+compo_bar1
+dev.off()
+
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FB/Group_percentage_across_SubCluster.pdf',8,5)
+compo_bar2
+dev.off()
+```
+
+
+## Vln plots
+```{r,fig.width=9,fig.height=10}
+VlnPlot(FB_seurat, features = c('Myh6','Ppara','Ryr2','Tnnt2','Tnni3k','Myh7','Ankrd1','Nppa','Nppb','Piezo1','Piezo2','Yap1'),
+        ncol = 3, group.by = 'seurat_clusters',pt.size = 0)
+
+VlnPlot(FB_seurat, features = c('Myh6','Ppara','Ryr2','Tnnt2','Tnni3k','Myh7','Ankrd1','Nppa','Nppb','Piezo1','Piezo2','Yap1'),
+        ncol = 3, group.by = 'Group',pt.size = 0,cols = group.colors)
+```
+
+
+
+## GSVA analysis
+```{r}
+library(GSVA)
+set.seed(123)
+
+load('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/Hydrogel_Treatment/result/Hydrogel_bulkRNAseq_interesting_genes.RData')
+
+gene.list = list(SHICC = cardiac.genes, SHMMS = mechanical.genes)
+
+meth = 'gsva'
+
+if(meth=='gsva'){
+  FB.mat = FB_seurat@assays$RNA@data
+  FB.mat = as.matrix(FB.mat[rownames(FB.mat)%in%unique(unlist(gene.list)),])
+  FB.GSVA <- gsva(FB.mat, gset.idx.list = gene.list, kcdf="Gaussian",method = "gsva", parallel.sz=1)
+
+}else{
+  FB.mat = FB_seurat@assays$RNA@data
+  FB.mat = as.matrix(FB.mat[rownames(FB.mat)%in%unique(unlist(gene.list)),])
+  FB.GSVA <- gsva(FB.mat, gset.idx.list = gene.list, kcdf="Poisson",
+                  method = "ssgsea", parallel.sz=1)
+}
+
+```
+
+
+### melt the matrix of GSVA scores
+```{r,fig.width=5,fig.height=4.8}
+library(scales)
+FB.GSVA.mat = t(apply(FB.GSVA,1,rescale))
+
+FB.GSVA.melt = melt(as.matrix(FB.GSVA.mat))
+colnames(FB.GSVA.melt)[1:2] = c('gene','cellID')
+
+FB.meta = FB_seurat@meta.data
+FB.meta$cellID = rownames(FB.meta)
+FB.GSVA.melt = merge(FB.GSVA.melt, FB.meta[,c('cellID','Group','seurat_clusters')], by = 'cellID')
+
+setDT(FB.GSVA.melt)
+FB.GSVA.melt
+sort(unique(FB.GSVA.melt$Group))
+
+```
+
+
+```{r}
+FB.GSVA.mat = t(apply(FB.GSVA,1,rescale))
+FB_seurat@assays$RNA@data = rbind(FB_seurat@assays$RNA@data, FB.GSVA.mat)
+CC = VlnPlot(FB_seurat,c('SHICC'),group.by = 'seurat_clusters',split.by = 'Group', ncol = 1,cols = pal_nejm()(4)[c(4,2,3,1)],y.max = 1, pt.size = 0)+
+  labs(x='',y='GSVA scores')+theme(legend.position = 'none')
+
+MS = VlnPlot(FB_seurat,c('SHMMS'),group.by = 'seurat_clusters',split.by = 'Group', ncol = 1,cols = pal_nejm()(4)[c(4,2,3,1)],y.max = 1, pt.size = 0)+
+  labs(x='',y='GSVA scores')+theme(legend.position = 'none')
+
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FB/GSVA_comparison_Vln.pdf',12,4)
+CC
+MS
+dev.off()
+```
+
+
+```{r}
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FB/GSVA_violin_plots_across_Group.pdf',5,4.8)
+for(i in names(gene.list)){
+  vp = ggviolin(FB.GSVA.melt[gene == i], x = 'Group', y = 'value',fill = 'Group',
+                palette = pal_nejm()(4)[c(4,2,3,1)],trim = T) +
+    geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI','Sham'),c('MI','MI_soft'),c('MI','MI_stiff'),c('MI_soft','MI_stiff')),font.label=list(size=14),method = 'wilcox.test')+
+  labs(x = '', y = 'GSVA scores', title = i) +#  coord_cartesian(ylim=c(0,10)) 
+   my_theme + theme(legend.position = 'none')
+  print(vp)
+}
+dev.off()
+```
+
+
+### sub-cluster levels
+```{r}
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FB/GSVA_violin_plots_across_SubCluster.pdf',5,4)
+for(i in names(gene.list)){
+  vp = ggviolin(FB.GSVA.melt[gene == i], x = 'seurat_clusters', y = 'value',fill = 'seurat_clusters',trim = T) +
+    geom_boxplot(width=0.1,fill='white',outlier.shape = NA) + 
+  labs(x = '', y = 'GSVA scores', title = i) +#  coord_cartesian(ylim=c(0,10)) 
+   my_theme + theme(legend.position = 'none')
+  print(vp)
+}
+dev.off()
+```
+
+
+```{r}
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FB/GSVA_in_Cluster4_across_Group.pdf',5,4.8)
+for(i in names(gene.list)){
+  vp = ggviolin(FB.GSVA.melt[seurat_clusters==4&gene == i], x = 'Group', y = 'value',fill = 'Group',
+                palette = pal_nejm()(4)[c(4,2,3,1)],trim = T) +
+    geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI','Sham'),c('MI','MI_soft'),c('MI','MI_stiff'),c('MI_soft','MI_stiff')),font.label=list(size=14))+
+  labs(x = '', y = 'GSVA scores', title = i) +#  coord_cartesian(ylim=c(0,10)) 
+   my_theme + theme(legend.position = 'none')
+  print(vp)
+}
+dev.off()
+
+
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/FB/GSVA_in_Cluster3_across_Group.pdf',5,4.8)
+for(i in names(gene.list)){
+  vp = ggviolin(FB.GSVA.melt[seurat_clusters==3&gene == i], x = 'Group', y = 'value',fill = 'Group',
+                palette = pal_nejm()(4)[c(4,2,3,1)],trim = T) +
+    geom_boxplot(width=0.15,fill='white',outlier.shape = NA) + 
+  stat_compare_means(comparisons = list(c('MI','Sham'),c('MI','MI_soft'),c('MI','MI_stiff'),c('MI_soft','MI_stiff')),font.label=list(size=14))+
+  labs(x = '', y = 'GSVA scores', title = i) +#  coord_cartesian(ylim=c(0,10)) 
+   my_theme + theme(legend.position = 'none')
+  print(vp)
+}
+dev.off()
+```
+
+
+```{r}
+save(FB_seurat, FB.GSVA, FB.GSVA.melt, file = '~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_FB_obj.RData')
+```
+

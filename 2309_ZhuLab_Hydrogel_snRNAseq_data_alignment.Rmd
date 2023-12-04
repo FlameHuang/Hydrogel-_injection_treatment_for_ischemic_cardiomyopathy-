@@ -1,0 +1,1634 @@
+---
+title: "2309_ZhuLab_Hydrogel_snRNAseq_data_alignment"
+author: "HuangFei"
+date: "2023/9/16"
+output: html_document
+---
+
+```{bash}
+cd /share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/data
+
+for fq in `ls *fastq.gz`
+do
+ll $fq
+
+md5sum $fq | awk -F ' ' '{print $2"\t"$1}' >> snRNAseq_md5.txt
+done
+
+```
+
+
+## build Rn7 10X reference
+```{bash}
+cd /share/home/shenlab/huangfei/genome_reference/rn7
+wget -c https://ftp.ensembl.org/pub/release-110/gtf/rattus_norvegicus/Rattus_norvegicus.mRatBN7.2.110.gtf.gz
+wget -c https://ftp.ensembl.org/pub/release-110/fasta/rattus_norvegicus/dna/Rattus_norvegicus.mRatBN7.2.dna.toplevel.fa.gz
+gunzip Rattus_norvegicus.mRatBN7.2.110.gtf.gz
+gunzip Rattus_norvegicus.mRatBN7.2.dna.toplevel.fa.gz
+
+
+echo "Building genome index" on $(date)
+cd /share/home/shenlab/huangfei/genome_reference/rn7
+cellranger mkref \
+--genome=RatBN7 \
+--fasta=Rattus_norvegicus.mRatBN7.2.dna.toplevel.fa \
+--genes=Rattus_norvegicus.mRatBN7.2.110.gtf
+
+```
+
+
+# 10X Cellranger alignment
+```{bash}
+cd ~/project/sc_Cardiomyocytes
+mkdir snRNAseq/data
+mkdir snRNAseq/alignment
+
+for i in Sham1 Sham2 MI1 MI2 MI_stiff1 MI_stiff2 MI_soft1 MI_soft2
+do
+mkdir snRNAseq/data/$i
+mkdir snRNAseq/alignment/$i
+done
+
+cd 20230824
+
+mv L1EHH2500942--sham_1.R1.raw.fastq.gz ../snRNAseq/data/Sham1/Sham1_S1_L001_R1_001.fastq.gz
+mv L1EHH2500942--sham_1.R2.raw.fastq.gz ../snRNAseq/data/Sham1/Sham1_S1_L001_R2_001.fastq.gz
+
+mv L1EHH2500943--sham_2.R1.raw.fastq.gz ../snRNAseq/data/Sham2/Sham2_S1_L001_R1_001.fastq.gz
+mv L1EHH2500943--sham_2.R2.raw.fastq.gz ../snRNAseq/data/Sham2/Sham2_S1_L001_R2_001.fastq.gz
+
+mv L1EHH2500944--MI_stif1.R1.raw.fastq.gz ../snRNAseq/data/MI_stiff1/MI_stiff1_S1_L001_R1_001.fastq.gz
+mv L1EHH2500944--MI_stif1.R2.raw.fastq.gz ../snRNAseq/data/MI_stiff1/MI_stiff1_S1_L001_R2_001.fastq.gz
+
+mv L1EHH2500945--MI_stif2.R1.raw.fastq.gz ../snRNAseq/data/MI_stiff2/MI_stiff2_S1_L001_R1_001.fastq.gz
+mv L1EHH2500945--MI_stif2.R2.raw.fastq.gz ../snRNAseq/data/MI_stiff2/MI_stiff2_S1_L001_R2_001.fastq.gz
+
+mv L1EHH2500946--MI_soft1.R1.raw.fastq.gz ../snRNAseq/data/MI_soft1/MI_soft1_S1_L001_R1_001.fastq.gz
+mv L1EHH2500946--MI_soft1.R2.raw.fastq.gz ../snRNAseq/data/MI_soft1/MI_soft1_S1_L001_R2_001.fastq.gz
+
+mv L1EHH2500947--MI_soft2.R1.raw.fastq.gz ../snRNAseq/data/MI_soft2/MI_soft2_S1_L001_R1_001.fastq.gz
+mv L1EHH2500947--MI_soft2.R2.raw.fastq.gz ../snRNAseq/data/MI_soft2/MI_soft2_S1_L001_R2_001.fastq.gz
+
+mv L1EHH2500948--MI_1.R1.raw.fastq.gz ../snRNAseq/data/MI1/MI1_S1_L001_R1_001.fastq.gz
+mv L1EHH2500948--MI_1.R2.raw.fastq.gz ../snRNAseq/data/MI1/MI1_S1_L001_R2_001.fastq.gz
+
+mv MI_2_S1_L001_R1_001.fastq.gz ../snRNAseq/data/MI2/MI2_S1_L001_R1_001.fastq.gz
+mv MI_2_S1_L001_R2_001.fastq.gz ../snRNAseq/data/MI2/MI2_S1_L001_R2_001.fastq.gz
+```
+
+
+## Sham
+```{bash}
+#!/bin/bash
+#SBATCH -J Sham
+#SBATCH -p cpu
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=10
+#SBATCH --mem=128G
+#SBATCH -o mapping_Sham.out
+#SBATCH -e mapping_Sham.err
+
+
+echo ${SLURM_JOB_NODELIST}
+echo "start mapping Sham1 to rat genome" on $(date)
+
+genome_index=/share/home/shenlab/huangfei/genome_reference/rn7/RatBN7
+
+out_dir=~/project/sc_Cardiomyocytes/snRNAseq
+cd $out_dir/alignment 
+
+cellranger count --id=Sham1 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/Sham1 \
+                   --sample=Sham1 --include-introns \
+                   --expect-cells=5000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+cellranger count --id=Sham2 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/Sham2 \
+                   --sample=Sham2 --include-introns \
+                   --expect-cells=5000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+```
+
+## MI
+```{bash}
+#!/bin/bash
+#SBATCH -J MI
+#SBATCH -p cpu
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=10
+#SBATCH --mem=128G
+#SBATCH -o mapping_MI.out
+#SBATCH -e mapping_MI.err
+
+
+echo ${SLURM_JOB_NODELIST}
+echo "start mapping MI1 to rat genome" on $(date)
+
+genome_index=/share/home/shenlab/huangfei/genome_reference/rn7/RatBN7
+
+out_dir=~/project/sc_Cardiomyocytes/snRNAseq
+cd $out_dir/alignment 
+
+cellranger count --id=MI1 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/MI1 \
+                   --sample=MI1 --include-introns \
+                   --expect-cells=10000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+cellranger count --id=MI2 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/MI2 \
+                   --sample=MI2 --include-introns \
+                   --expect-cells=10000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+```
+
+## MI_sitff
+```{bash}
+#!/bin/bash
+#SBATCH -J MI_stiff
+#SBATCH -p cpu
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=10
+#SBATCH --mem=128G
+#SBATCH -o mapping_MI_stiff.out
+#SBATCH -e mapping_MI_stiff.err
+
+
+echo ${SLURM_JOB_NODELIST}
+echo "start mapping MI_stiff1 to rat genome" on $(date)
+
+genome_index=/share/home/shenlab/huangfei/genome_reference/rn7/RatBN7
+
+out_dir=~/project/sc_Cardiomyocytes/snRNAseq
+cd $out_dir/alignment 
+
+cellranger count --id=MI_stiff1 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/MI_stiff1 \
+                   --sample=MI_stiff1 --include-introns \
+                   --expect-cells=8000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+cellranger count --id=MI_stiff2 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/MI_stiff2 \
+                   --sample=MI_stiff2 --include-introns \
+                   --expect-cells=8000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+```
+
+## MI_soft
+```{bash}
+#!/bin/bash
+#SBATCH -J MI_soft
+#SBATCH -p cpu
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=10
+#SBATCH --mem=128G
+#SBATCH -o mapping_MI_soft.out
+#SBATCH -e mapping_MI_soft.err
+
+
+echo ${SLURM_JOB_NODELIST}
+echo "start mapping MI_soft1 to rat genome" on $(date)
+
+genome_index=/share/home/shenlab/huangfei/genome_reference/rn7/RatBN7
+
+out_dir=~/project/sc_Cardiomyocytes/snRNAseq
+cd $out_dir/alignment 
+
+cellranger count --id=MI_soft1 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/MI_soft1 \
+                   --sample=MI_soft1 --include-introns \
+                   --expect-cells=10000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+cellranger count --id=MI_soft2 \
+                   --transcriptome=$genome_index \
+                   --fastqs=$out_dir/data/MI_soft2 \
+                   --sample=MI_soft2 --include-introns \
+                   --expect-cells=10000 \
+                   --localcores=2 \
+                   --localmem=64
+
+
+echo end on $(date)
+
+```
+
+# Seurat analysis
+```{r}
+library(data.table)
+library(Seurat)
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/alignment')
+
+Sham1 = Read10X('Sham1/outs/filtered_feature_bc_matrix/')
+dim(Sham1)
+# 22938 12767
+Sham2 = Read10X('Sham2/outs/filtered_feature_bc_matrix/')
+dim(Sham2)
+# 11088
+colnames(Sham1) = paste0('Sham1.',colnames(Sham1))
+colnames(Sham2) = paste0('Sham2.',colnames(Sham2))
+
+MI1 = Read10X('MI1/outs/filtered_feature_bc_matrix/')
+dim(MI1)
+# 12175
+MI2 = Read10X('MI2/outs/filtered_feature_bc_matrix/')
+dim(MI2)
+# 10667
+colnames(MI1) = paste0('MI1.',colnames(MI1))
+colnames(MI2) = paste0('MI2.',colnames(MI2))
+
+MI_stiff1 = Read10X('MI_stiff1/outs/filtered_feature_bc_matrix/')
+dim(MI_stiff1)
+# 8333
+MI_stiff2 = Read10X('MI_stiff2/outs/filtered_feature_bc_matrix/')
+dim(MI_stiff2)
+# 9990
+colnames(MI_stiff1) = paste0('MI_stiff1.',colnames(MI_stiff1))
+colnames(MI_stiff2) = paste0('MI_stiff2.',colnames(MI_stiff2))
+
+MI_soft1 = Read10X('MI_soft1/outs/filtered_feature_bc_matrix/')
+dim(MI_soft1)
+# 10699
+MI_soft2 = Read10X('MI_soft2/outs/filtered_feature_bc_matrix/')
+dim(MI_soft2)
+# 10996
+colnames(MI_soft1) = paste0('MI_soft1.',colnames(MI_soft1))
+colnames(MI_soft2) = paste0('MI_soft2.',colnames(MI_soft2))
+```
+
+```{r}
+mat = do.call(cbind,list(Sham1,Sham2,MI1,MI2,MI_stiff1,MI_stiff2,MI_soft1,MI_soft2))
+hydrogel = CreateSeuratObject(counts = mat, min.cells = 10, min.features = 0, project = 'rat')
+hydrogel[["percent.mito"]] <- PercentageFeatureSet(hydrogel, pattern = "^Mt-")
+hydrogel[["percent.ribo"]] <- PercentageFeatureSet(hydrogel, pattern = "^Rp[ls]")
+
+hydrogel@meta.data$Sample = do.call(rbind, strsplit(colnames(hydrogel),'[.]'))[,1]
+
+summary(hydrogel$nFeature_RNA)
+#Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#165     951    1490    1638    2122   10156
+summary(hydrogel$nCount_RNA)
+#Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#499    1309    2310    3152    3870   66606
+summary(hydrogel$percent.mito)
+#Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+#0  0.4337  0.9926  2.1013  2.3279 81.7057
+```
+
+
+
+## Data quality control
+```{r,fig.width=4.5,fig.height=4.5}
+meta = hydrogel@meta.data
+meta$Group = gsub('[[:digit:]]','',meta$Sample)
+meta$Group = factor(meta$Group, levels = sort(unique(meta$Group)))
+meta-> hydrogel@meta.data
+
+ num = VlnPlot(hydrogel, pt.size =  0,cols = pal_nejm()(4)[c(4,2,3,1)],
+               group.by = 'Group',y.max = 10000,
+               features = c("nFeature_RNA"), ncol = 1)+
+    geom_boxplot(width=0.08,fill='#CFCFCF',outlier.shape = NA) +
+  labs(x = '', title = 'Number of detected genes')+
+  my_theme + theme(legend.position = 'none')
+
+
+  umi = VlnPlot(hydrogel, pt.size =  0,cols = pal_nejm()(4)[c(4,2,3,1)],
+               group.by = 'Group',y.max = 20000,
+               features = c("nCount_RNA"), ncol = 1)+
+     geom_boxplot(width=0.08,fill='#CFCFCF',outlier.shape = NA) +
+  labs(x = '', title = 'Number of UMI counts')+
+  my_theme + theme(legend.position = 'none')
+
+
+  mito = VlnPlot(hydrogel, pt.size =  0,cols = pal_nejm()(4)[c(4,2,3,1)],
+               group.by = 'Group',y.max = 25,
+               features = c("percent.mito"), ncol = 1)+
+     geom_boxplot(width=0.08,fill='#CFCFCF',outlier.shape = NA) +
+  labs(x = '', title = 'Mitochondrial genes%')+
+  my_theme + theme(legend.position = 'none')
+
+
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure')
+pdf(paste0('QC/Before_filtering_UMI_counts_VlnPlot.pdf'),5,4.5)
+print(umi)
+dev.off()
+
+pdf(paste0('QC/Before_filtering_Detected_gene_number_VlnPlot.pdf'),5,4.5)
+print(num)
+dev.off()
+
+pdf(paste0('QC/Before_filtering_Mitochondrial_genes_VlnPlot.pdf'),5,4.5)
+print(mito)
+dev.off()
+```
+
+```{r}
+quantile(hydrogel$nFeature_RNA, probs=seq(0,1,0.1))
+#    0%    10%    20%    30%    40%    50%    60%    70%    80%    90%   100% 
+# 120.0  448.0  651.0 1171.0 1634.0 1994.0 2338.8 2725.6 3204.0 3901.0 8652.0 
+quantile(hydrogel$nCount_RNA, probs=seq(0,1,0.1))
+#      0%      10%      20%      30%      40%      50%      60%      70%    80%      90%     100%
+#   511.0    696.0   1135.0   2296.0   3507.0   4599.0   5818.0   7395.6   9650.4  14148.0 106372.0
+     
+ 
+     
+hydrogel = subset(hydrogel, nCount_RNA>=500 & nCount_RNA < 8000 & nFeature_RNA>=500&nFeature_RNA<5000 & percent.mito < 5)
+
+#hydrogel = subset(hydrogel, nCount_RNA>=500 & nCount_RNA < 25000 & nFeature_RNA>=500&nFeature_RNA<5000 & percent.mito < 10)
+
+
+hydrogel = NormalizeData(hydrogel)
+hydrogel = FindVariableFeatures(hydrogel)
+hydrogel = ScaleData(hydrogel)
+
+```
+
+
+```{r}
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure')
+ num = VlnPlot(hydrogel, pt.size =  0,
+               group.by = 'Group',y.max = 5000,
+               cols = pal_nejm()(4)[c(4,2,3,1)],
+               features = c("nFeature_RNA"), ncol = 1)+
+    geom_boxplot(width=0.08,fill='#CFCFCF',outlier.shape = NA) +
+  labs(x = '', title = 'Number of detected genes')+
+  my_theme + theme(legend.position = 'none')
+
+
+  umi = VlnPlot(hydrogel, pt.size =  0,
+                cols = pal_nejm()(4)[c(4,2,3,1)],
+               group.by = 'Group',y.max = 8000,
+               features = c("nCount_RNA"), ncol = 1)+
+     geom_boxplot(width=0.08,fill='#CFCFCF',outlier.shape = NA) +
+  labs(x = '', title = 'Number of UMI counts')+
+  my_theme + theme(legend.position = 'none')
+
+
+  
+pdf(paste0('QC/After_filtering_UMI_counts_VlnPlot.pdf'),5,4.5)
+print(umi)
+dev.off()
+
+pdf(paste0('QC/After_filtering_Detected_gene_number_VlnPlot.pdf'),5,4.5)
+print(num)
+dev.off()
+
+  mito = VlnPlot(hydrogel, pt.size =  0,
+                 cols = pal_nejm()(4)[c(4,2,3,1)],
+               group.by = 'Group',y.max = 5,
+               features = c("percent.mito"), ncol = 1)+
+     geom_boxplot(width=0.08,fill='#CFCFCF',outlier.shape = NA) +
+  labs(x = '', title = 'Mitochondrial genes%')+
+  my_theme + theme(legend.position = 'none')
+
+
+pdf(paste0('QC/After_filtering_Mitochondrial_genes_VlnPlot.pdf'),5,4.5)
+print(mito)
+dev.off()
+```
+
+
+
+###PC selections
+```{r, fig.height=7.5,fig.width=7.5}
+#hydrogel <- subset(hydrogel, subset = nFeature_RNA > nGene & percent.mt < mt)
+DefaultAssay(hydrogel) <- 'RNA'
+setwd('~/project/sc_Cardiomyocytes/snRNAseq/figure/dm')
+#setwd('~/Project/Osteoclast/ZYX/hydrogel/figure/dm')
+hydrogel <- RunPCA(hydrogel, npcs=50, verbose=F)
+
+pdf('PC_heatmaps.pdf',7.5,7.5)
+DimHeatmap(hydrogel, dims = 1:15, cells = 500, balanced = TRUE)
+DimHeatmap(hydrogel, dims = 16:30, cells = 500, balanced = TRUE)
+DimHeatmap(hydrogel, dims = 31:45, cells = 500, balanced = TRUE)
+dev.off()
+
+pdf('PC_selection.pdf',5.5,5)
+ElbowPlot(hydrogel, ndims = 30)
+  #geom_vline(mapping = aes(xintercept = 11), size = 1, color = 'red', linetype = 'dashed') +
+ # labs(title = paste0('PCA of ', ncol(hydrogel), ' cells'))
+dev.off()
+```
+
+
+
+### Dimension reduction and Clustering
+```{r}
+# 20 PCs based on elbow plot
+npcs <- 1:20
+npcs = 1:21
+hydrogel <- RunUMAP(hydrogel, dims = npcs, min.dist = 0.3, n.neighbors = 30L, umap.method = 'uwot')
+hydrogel <- FindNeighbors(hydrogel, dims = npcs)
+```
+
+### clustering and UMAP
+```{r}
+
+hydrogel <- FindClusters(hydrogel, resolution = 0.1)
+pdf('UMAP_by_res0.1_cluster.pdf',4.8,4.5)
+DimPlot(hydrogel, label = T, reduction = 'umap') + labs(title = '')
+dev.off()
+
+hydrogel <- FindClusters(hydrogel, resolution = 0.3)
+
+pdf('UMAP_by_res0.3_cluster.pdf',4.8,4.5)
+DimPlot(hydrogel, label = T, reduction = 'umap') + labs(title = '')
+dev.off()
+
+
+pdf('UMAP_by_Sample.pdf',5,4.5)
+DimPlot(hydrogel, label = T, reduction = 'umap',group.by = 'Sample') + labs(title = '')
+dev.off()
+
+cellsUMAP = as.data.frame(Embeddings(object = hydrogel, reduction = "umap"))
+
+meta = hydrogel@meta.data
+meta$Group = gsub('[[:digit:]]','',meta$Sample)
+meta$Group = factor(meta$Group, levels = sort(unique(meta$Group)))
+meta = cbind(meta,cellsUMAP)
+meta-> hydrogel@meta.data
+
+pdf('UMAP_by_Group.pdf',5,4.5)
+DimPlot(hydrogel, label = T, reduction = 'umap',group.by = 'Group') + labs(title = '')
+dev.off()
+
+#pdf('UMAP_by_Group.pdf',5.2,4.5)
+##ggscatter(meta[sample(1:nrow(meta),size = nrow(meta)),], x = 'UMAP_1', y ='UMAP_2', color = 'Group', size=0.1) +
+#  my_theme + theme(legend.title = element_blank())
+#dev.off()
+
+```
+
+```{r}
+dir.create('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/RNA')
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/RNA')
+png('CM_marker_feature_plot.png',900,750)
+FeaturePlot(hydrogel, c("Tnnt2","Actn2","Myh6","Myh7","Tnni3","Myl2","Myl3","Myl7","Acta1"),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = F,slot = 'data')
+dev.off()
+
+png('Immune_marker_feature_plot.png',900,750)
+FeaturePlot(hydrogel, c('Ptprc',"Cd68","Csf1r","Cd163","C5ar1","Mrc1",'Cd3d','Cd3e','Cd2','Cd4a','Cd8','Nkg7'),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = T,slot = 'data')
+dev.off()
+
+png('EC_marker_feature_plot.png',900,500)
+FeaturePlot(hydrogel, c("Cdh5","Vwf","Kdr","Eng","Pecam1"),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = T,slot = 'data')
+dev.off()
+
+png('FB_marker_feature_plot.png',900,500)
+FeaturePlot(hydrogel, c("Fn1","Dcn","Col1a1","Col1a2","Pdgfra"),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = F,slot = 'data')
+dev.off()
+
+
+```
+
+
+## Harmony
+```{r, fig.height=7.5,fig.width=7.5}
+#sperm <- subset(sperm, subset = nFeature_RNA > nGene & percent.mt < mt)
+DefaultAssay(hydrogel) <- 'RNA'
+setwd('~/project/sc_Cardiomyocytes/snRNAseq/figure/dm')
+#setwd('~/Project/Osteoclast/ZYX/hydrogel/figure/dm')
+hydrogel <- RunHarmony(hydrogel,group.by.vars = 'Sample')
+
+pdf('Harmony_heatmaps.pdf',7.5,7.5)
+DimHeatmap(hydrogel, dims = 1:15, cells = 500, balanced = TRUE, reduction = 'harmony')
+DimHeatmap(hydrogel, dims = 16:30, cells = 500, balanced = TRUE, reduction = 'harmony')
+DimHeatmap(hydrogel, dims = 31:45, cells = 500, balanced = TRUE, reduction = 'harmony')
+dev.off()
+
+pdf('Harmony_selection.pdf',5.5,5)
+ElbowPlot(hydrogel, ndims = 30, reduction = 'harmony')
+dev.off()
+```
+
+
+
+### Dimension reduction and Clustering
+```{r}
+# 20 PCs based on elbow plot
+npcs <- 1:21
+hydrogel <- RunUMAP(hydrogel, dims = npcs, min.dist = 0.3, n.neighbors = 30L, umap.method = 'uwot', reduction = 'harmony')
+hydrogel <- FindNeighbors(hydrogel, dims = npcs, reduction = 'harmony')
+
+```
+
+
+
+
+### t-SNE and UMAP
+```{r,fig.width=4.5,fig.height=4}
+setwd('~/project/sc_Cardiomyocytes/snRNAseq/figure/dm')
+
+hydrogel <- FindClusters(hydrogel, resolution = 0.1)
+
+
+pdf('Harmony_by_res0.1_cluster.pdf',4.8,4.5)
+DimPlot(hydrogel, label = T, reduction = 'umap') + labs(title = '')
+dev.off()
+
+hydrogel <- FindClusters(hydrogel, resolution = 0.3)
+
+pdf('Harmony_by_res0.3_cluster.pdf',4.8,4.5)
+DimPlot(hydrogel, label = T, reduction = 'umap') + labs(title = '')
+dev.off()
+
+
+cellsUMAP = as.data.frame(Embeddings(object = hydrogel, reduction = "umap"))
+
+meta = hydrogel@meta.data
+meta$Group = gsub('[[:digit:]]','',meta$Sample)
+meta$Group = factor(meta$Group, levels = sort(unique(meta$Group)))
+meta$Sample = factor(meta$Sample, levels = c(paste0('MI',1:2),paste0('MI_soft',1:2),paste0('MI_stiff',1:2),paste0('Sham',1:2)))
+meta = cbind(meta,cellsUMAP)
+meta-> hydrogel@meta.data
+
+
+set.seed(2023)
+pdf('Harmony_by_Group.pdf',5.5,4.5)
+ggscatter(meta[sample(1:nrow(meta),size = nrow(meta)),], 
+          palette = pal_nejm()(4)[c(4,2,3,1)],
+          x = 'UMAP_1', y ='UMAP_2', color = 'Group', size=0.1) +
+  my_theme + theme(legend.title = element_blank())
+dev.off()
+
+pdf('Harmony_by_Sample.pdf',5.2,4.5)
+ggscatter(meta[sample(1:nrow(meta),size = nrow(meta)),], x = 'UMAP_1', y ='UMAP_2', color = 'Sample', size=0.1) +
+  my_theme + theme(legend.title = element_blank())
+dev.off()
+```
+
+```{r}
+dir.create('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/Harmony')
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/Harmony')
+png('CM_marker_feature_plot.png',900,750)
+FeaturePlot(hydrogel, c("Tnnt2","Actn2","Myh6","Myh7","Tnni3","Myl2","Myl3","Myl7","Acta1"),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = F,slot = 'data')
+dev.off()
+
+png('Immune_marker_feature_plot.png',900,750)
+FeaturePlot(hydrogel, c('Ptprc',"Cd68","Csf1r","Cd163","C5ar1","Mrc1",'Cd3d','Cd3e','Cd2','Cd4a','Cd8','Nkg7'),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = T,slot = 'data')
+dev.off()
+
+png('EC_marker_feature_plot.png',900,500)
+FeaturePlot(hydrogel, c("Cdh5","Vwf","Kdr","Eng","Pecam1"),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = T,slot = 'data')
+dev.off()
+
+png('FB_marker_feature_plot.png',900,500)
+FeaturePlot(hydrogel, c("Fn1","Dcn","Col1a1","Col1a2","Pdgfra"),reduction = 'umap',cols = c('lightgrey','#FF4500'),ncol = 3, order = F,slot = 'data')
+dev.off()
+
+
+```
+
+
+
+
+```{r}
+CM = subset(hydrogel, RNA_snn_res.0.1==3)
+table(CM$Group)
+#MI  MI_soft MI_stiff     Sham 
+#457      785      418     5185
+FB = subset(hydrogel, RNA_snn_res.0.1==0)
+table(FB$Group)
+#MI  MI_soft MI_stiff     Sham 
+#10075     8727     6341     5974
+EC = subset(hydrogel, RNA_snn_res.0.1==2)
+table(EC$Group)
+#MI  MI_soft MI_stiff     Sham 
+#2635     2055     1722     2364
+MP = subset(hydrogel, RNA_snn_res.0.1==1)
+table(MP$Group)
+#MI  MI_soft MI_stiff     Sham 
+#1884     2720     4361     1365 
+TC = subset(hydrogel, RNA_snn_res.0.1==5)
+table(TC$Group)
+#MI  MI_soft MI_stiff     Sham 
+#436      310      340      625
+```
+
+
+```{r}
+CM = subset(hydrogel, RNA_snn_res.0.1==3)
+Idents(hydrogel) = 'RNA_snn_res.0.1'
+Res01.markers = FindAllMarkers(hydrogel, only.pos = T)
+setDT(Res01.markers)
+Res01.markers[gene%in%c("Tnnt2","Actn2","Myh6","Myh7","Tnni3","Myl2","Myl3","Myl7","Acta1")]
+Res01.markers[gene%in%c('Ptprc',"Cd68","Csf1r","Cd163","C5ar1","Mrc1",'Cd3d','Cd3e','Cd2','Cd4a','Cd8','Nkg7')]
+Res01.markers[gene%in%c("Cdh5","Vwf","Kdr","Eng","Pecam1")][avg_log2FC>1]
+Res01.markers[gene%in%c("Fn1","Dcn","Col1a1","Col1a2","Pdgfra")][avg_log2FC>1]
+Res01.markers[gene%in%c("Acta2","Myh11","Mylk")][avg_log2FC>1]
+
+write.table(Res01.markers, quote = F, sep = '\t', row.names = F, col.names = T,
+            file = '~/project/sc_Cardiomyocytes/snRNAseq/result/Res0.1_cluster_markers.txt')
+```
+
+0,FB
+1,MP
+2,10 EC
+3,CM
+4,SMC
+5,T
+8,Cycling
+
+```{r}
+heart.meta = hydrogel@meta.data
+heart.meta$CellType = plyr::revalue(heart.meta$RNA_snn_res.0.1,
+                                    c('0'='FB','1'='MP','2'='EC','3'='CM','4'='SMC','5'='T','6'='Other',
+                                      '7'='Other','8'='Cycling','9'='Other','10'='EC'))
+
+heart.meta[heart.meta$UMAP_1>(-5)&heart.meta$UMAP_2<(-3),'CellType'] = 'FB'
+heart.meta[heart.meta$RNA_snn_res.0.1==6&heart.meta$UMAP_1>0&heart.meta$UMAP_2<7,'CellType'] = 'MP'
+heart.meta[heart.meta$RNA_snn_res.0.1==6&heart.meta$UMAP_1>(-2)&heart.meta$UMAP_2>7,'CellType'] = 'T'
+heart.meta[heart.meta$RNA_snn_res.0.1==6&heart.meta$UMAP_1<(-2.5)&heart.meta$UMAP_2>4,'CellType'] = 'EC'
+heart.meta[heart.meta$RNA_snn_res.0.1==6&heart.meta$UMAP_1<0&heart.meta$UMAP_1>(-3),'CellType'] = 'SMC'
+
+table(heart.meta$CellType)
+heart.meta$CellType = factor(heart.meta$CellType, levels = c('CM','EC','FB','MP','SMC','T','Cycling','Other'))
+heart.meta -> hydrogel@meta.data
+
+cell.colors = c(pal_jama()(6)[c(4,2,5,3,6)],scales::hue_pal()(2),pal_jama()(1))
+names(cell.colors) = c('CM','EC','FB','MP','SMC','T','Cycling','Other')
+
+pdf('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/dm/Harmony_by_CellType.pdf',6,5)
+DimPlot(hydrogel, reduction = 'umap',group.by = 'CellType',label = T,cols = cell.colors) +
+  my_theme + labs(title = '')
+dev.off()
+
+pdf('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/dm/CellType_Split_by_Group.pdf',9,8)
+DimPlot(hydrogel, group.by = 'CellType', split.by = 'Group',ncol = 2,cols = cell.colors) + my_theme+
+  labs(title = '')
+dev.off()
+```
+
+
+
+## cluster fraction/percentage per group
+```{r,fig.width=8,fig.height=4}
+library(ggpubr)
+
+meta = hydrogel@meta.data
+meta$cellID = rownames(meta)
+table(meta$CellType)
+cell_table = as.data.frame(with(meta, table(Group, CellType)))
+
+cell_table
+setDT(cell_table)
+cell_per = cell_table[,100*Freq/sum(Freq), by = .(Group)]
+cell_per$CellType = rep(unique(cell_table$CellType),4)
+
+cell_per
+
+compo_bar = ggbarplot(cell_per, x = 'Group', y = 'V1', fill = 'CellType',
+        position = position_stack(), rotate = TRUE,width = 0.7) + 
+  scale_fill_manual(values = cell.colors)+
+  labs( x ='',y='Percentage of cells (%)')  + my_theme + theme(legend.title = element_blank(),
+                                                              legend.position = 'right')
+
+pdf('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/QC/CellType_percentage_barplot.pdf',8,5)
+compo_bar
+dev.off()
+```
+
+##Vlnplot
+```{r}
+markers = c("Actn2","Myh6","Myh7",'Acta2','Myh11','Mylk',"Col1a1",'Dcn','Fn1',"Cdh5","Vwf","Kdr",'Ptprc','Csf1r',"Mrc1")
+
+
+hydrogel@meta.data$CellType = factor(hydrogel@meta.data$CellType, levels = c('CM','SMC','EC','FB','MP','T','Cycling','Other'))
+cell.colors = c(pal_jama()(6)[c(4,6,5,2,3)],scales::hue_pal()(2),pal_jama()(1))
+
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/CellType_markers_VlnPlot.pdf',6,10)
+Stacked_VlnPlot(seurat_object = hydrogel, features = markers,
+                x_lab_rotate = TRUE, group.by = 'CellType',colors_use=cell.colors)
+dev.off()
+```
+
+## Heatmaps
+```{r}
+Idents(hydrogel) = 'CellType'
+cell.markers = FindAllMarkers(hydrogel, only.pos = T)
+setDT(cell.markers)
+```
+
+```{r,fig.width=7,fig.height=7}
+gene2show =  c("Actn2","Myh6","Myh7",'Acta2','Myh11','Mylk',"Col1a1",'Dcn','Fn1',"Cdh5","Vwf","Kdr",'Ptprc','Csf1r',"Mrc1",
+               'Cd2','Cd3e','Cd3d','Tnnt2','Tnni3')
+
+library(ComplexHeatmap)
+
+p05.markers = cell.markers[grep('^AABR',gene,invert = T)][p_val_adj <0.05&cluster!='Other'&pct.1>pct.2]
+table(p05.markers$cluster)
+
+cells = table(p05.markers$cluster)
+
+p05.markers[,cluster:=factor(cluster,levels = c('CM','SMC','EC','FB','MP','T','Cycling','Other'))]
+p05.markers = p05.markers[order(cluster,gene)]
+
+p05.markers$group = ''
+for(i in names(cells)){
+  p05.markers[grep(i,cluster)]$group = paste0(i,'\n(n = ',cells[i],')')
+}
+table(p05.markers$group)
+p05.markers$group = factor(p05.markers$group, levels = unique(p05.markers$group))
+#meta2use = meta[CellType!='Others']
+meta = hydrogel@meta.data;
+meta$cellID = rownames(meta); setDT(meta)
+meta2use = list()
+table(meta$CellType)
+#meta[,CellType:=factor(CellType,levels = c('CM','SMC','EC','FB','MP','T','Cycling','Other'))]
+set.seed(2023)
+for(i in c('CM','SMC','EC','FB','MP','T','Cycling')){
+  cell_num = round(nrow(meta[CellType==i])/10,0)
+  ## random select a part of cells to
+  meta2use[[i]] = meta[order(-nCount_RNA)][CellType==i][sample(1:nrow(meta[CellType==i]),size = cell_num)]
+  #meta2use[[i]] = meta[order(-nCount_RNA)][CellType==i][1:cell_num]
+}
+meta2use = do.call(rbind, meta2use)
+
+meta2use[,CellType:=factor(CellType,levels = c('CM','SMC','EC','FB','MP','T','Cycling'))]
+meta2use = meta2use[order(CellType)]
+
+mat2use = hydrogel@assays$RNA@data[p05.markers$gene,meta2use$cellID]
+mat2use = t(scale(t(as.matrix(mat2use))))
+max(mat2use)
+min(mat2use)
+
+mat2use[mat2use>2] = 2
+mat2use[mat2use<(-2)] = -2
+mat2use = na.omit(mat2use)
+
+p05.markers = p05.markers[gene%in%rownames(mat2use)][avg_log2FC>1][order(cluster,gene)]
+p05.markers[,seq:=1:nrow(p05.markers)]
+p05.markers[gene%in%gene2show]
+row_anno = rowAnnotation(foo = anno_mark(at = p05.markers[gene%in%gene2show]$seq,
+                                         labels = p05.markers[gene%in%gene2show]$gene))
+
+col_anno = HeatmapAnnotation(CellType = anno_block(gp = gpar(fill = cell.colors[1:7])))
+
+# hmcols <- colorRampPalette(c('#9400D3','#363636','#FFFF00'))(100)
+ hmcols <- colorRampPalette(c('#E300E3','#150015','#FFFF00'))(100)
+
+
+pdf('~/project/sc_Cardiomyocytes/snRNAseq/figure/Raster_CellType_markers_Heatmaps.pdf',9,10)
+ Heatmap(mat2use[p05.markers$gene,], name = 'Z-score', cluster_rows = F, cluster_columns = F,col = hmcols,
+        column_split = meta2use$CellType, row_split = p05.markers$group,use_raster = T,
+        right_annotation = row_anno, top_annotation = col_anno,show_row_names = F, show_column_names = F)
+dev.off()
+```
+
+
+```{r}
+save(hydrogel,file = '/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_harmony_snRNAseq.RData')
+```
+
+### define functions to run GO and KEGG respectively
+```{r}
+set.seed(1000)
+library(data.table)
+library(Seurat)
+library(DOSE)
+library(org.Rn.eg.db)
+library(clusterProfiler)
+library(ggsci)
+library(ggpubr)
+library(ggplot2)
+library(AnnotationDbi)
+library(pheatmap)
+library(RColorBrewer)
+
+my_theme <- theme(plot.title = element_text(hjust = 0.5, size = 17),
+                  legend.position = 'right',
+                  legend.title =element_text(size=15),
+                  legend.text = element_text(size=15),
+                  axis.text.x = element_text(size=16),
+                  axis.title.x = element_text(size=16),
+                  axis.title.y = element_text(size=16),
+                  axis.text.y  = element_text(size=16),
+                  panel.border = element_blank(),
+                  axis.line.x = element_line(size=0.25, color="black"),
+                  axis.line.y = element_line(size=0.25, color="black"),
+                  panel.grid.minor.x = element_blank(), panel.grid.minor.y = element_blank(),
+                  panel.grid.major.x = element_blank(), panel.grid.major.y = element_blank(),
+                  panel.background = element_rect(fill='white'),
+                  legend.key=element_blank(),
+                  strip.text.x = element_text(size=15),
+                  strip.text.y = element_text(size=15),
+                  strip.background = element_rect(colour = 'white', fill = 'white'))
+
+run_KEGG_rat = function(candidate_gene, background_gene = NULL, gene_format = 'SYMBOL', cutoff=0.05,
+                    showCategory = 20, font.size = 10,title = 'KEGG enrichment'){
+  diff_gene_ID<-clusterProfiler::bitr(candidate_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+
+  if(is.null(background_gene)){
+    ekegg<-enrichKEGG(gene=diff_gene_ID$ENTREZID, organism = 'mmu',
+                      pAdjustMethod = "BH",
+                      pvalueCutoff =cutoff,
+                      qvalueCutoff = cutoff)
+  }else{
+    background_gene = clusterProfiler::bitr(background_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+  ekegg<-enrichKEGG(gene=diff_gene_ID$ENTREZID, organism = 'mmu',
+                    universe  = background_gene$ENTREZID,
+                    pAdjustMethod = "BH",
+                    pvalueCutoff =cutoff,
+                    qvalueCutoff = cutoff)
+  }
+  #ekegg <- setReadable(ekegg, OrgDb = org.Mm.eg.db, keytype = "ENTREZID")
+  ekegg.table = as.data.frame(ekegg)
+  if(nrow(ekegg.table)>0){
+    ekegg.table = ekegg.table[order(ekegg.table$p.adjust),]
+    print(ekegg.table$Description)
+    print(dotplot(ekegg, showCategory = showCategory, font.size = font.size, x='Count', title= title))
+  }
+  return(ekegg)
+}
+
+run_GO_rat = function(candidate_gene, background_gene=NULL, gene_format = 'SYMBOL', ontology = 'BP', cutoff=0.05,
+                  showCategory=10,font.size=10,title = 'GO enrichment'){
+  diff_gene_ID<-clusterProfiler::bitr(candidate_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+  if(is.null(background_gene)){
+    ego <-  simplify(enrichGO(gene = diff_gene_ID$ENTREZID,  OrgDb = org.Rn.eg.db,
+                    keyType = 'ENTREZID', ont = ontology, readable = T,
+                    pAdjustMethod = "BH", qvalueCutoff  = cutoff, pvalueCutoff  = cutoff))
+  } else{
+    background_gene = clusterProfiler::bitr(background_gene, fromType = gene_format, toType ="ENTREZID", OrgDb="org.Rn.eg.db")
+    ego <-  simplify(enrichGO(gene = diff_gene_ID$ENTREZID,  OrgDb = org.Rn.eg.db,
+                              universe = background_gene$ENTREZID,
+                     keyType = 'ENTREZID', ont = ontology, readable = T,
+                     pAdjustMethod = "BH", qvalueCutoff  = cutoff, pvalueCutoff  = cutoff))
+  }
+
+  if(nrow(ego@result)>0){
+    print(dotplot(ego, showCategory = showCategory, font.size = font.size, x='Count',title=title))
+  }
+  return(ego)
+}
+
+```
+
+```{r}
+Res01.markers = fread('~/project/sc_Cardiomyocytes/snRNAseq/result/Res0.1_cluster_markers.txt', header = T, sep = '\t')
+Res01.markers[cluster==6][p_val_adj<0.05&avg_log2FC>log2(1.5)]
+
+c0.bp = run_GO_rat(Res01.markers[cluster==0][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c1.bp = run_GO_rat(Res01.markers[cluster==1][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c2.bp = run_GO_rat(Res01.markers[cluster==2][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c3.bp = run_GO_rat(Res01.markers[cluster==3][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c4.bp = run_GO_rat(Res01.markers[cluster==4][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c5.bp = run_GO_rat(Res01.markers[cluster==5][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c6.bp = run_GO_rat(Res01.markers[cluster==6][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c7.bp = run_GO_rat(Res01.markers[cluster==7][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c8.bp = run_GO_rat(Res01.markers[cluster==8][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c9.bp = run_GO_rat(Res01.markers[cluster==9][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+c10.bp = run_GO_rat(Res01.markers[cluster==10][p_val_adj<0.05&avg_log2FC>log2(1.5)]$gene)
+```
+
+```{r}
+dotplot(c0.bp)
+dotplot(c1.bp)
+dotplot(c2.bp)
+dotplot(c3.bp)
+dotplot(c4.bp)
+dotplot(c5.bp)
+dotplot(c6.bp)
+dotplot(c7.bp)
+dotplot(c8.bp)
+dotplot(c9.bp)
+dotplot(c10.bp)
+```
+
+## Celltype markers
+### Violin
+```{r}
+gene2show = c('Ppara','Ppargc1a','Cpt1b',paste0('Myl',c(2,3,5,6,7)),'Mylk3','Tnni1','Tnni3','Tnni3k','Nrp1','Nrp2','Mybpc3','Ryr2','Myh6','Fgf12','Mhrt','Lpl','Ttn','Tnnt2','Actn2','Xirp2','Myh7','Myh7b','Ankrd1','Col1a1','Tgfb1','Tgfb2','Spp1','Nppa','Nppb','Myom2','Pioz1','Pioz2','Nr3c2',paste0('Mef2',c('a','b','c','d')),'Atf3','Flnc','Acta1','Cmya5','Pfkp','Pln','Cacna1c','Cacnb2','Myom1','Fhl2','Yap1','Cdh11','Tead1')
+gene2show = intersect(gene2show,rownames(CM))
+42
+
+CM = NormalizeData(CM)
+
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/CM')
+pdf('CM3_markers_VlnPlot.pdf',4,10)
+Stacked_VlnPlot(seurat_object = CM, features = gene2show[1:10],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = gene2show[11:20],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = gene2show[21:30],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = gene2show[31:40],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+dev.off()
+
+pdf('CM7_markers_VlnPlot.pdf',4,10)
+Stacked_VlnPlot(seurat_object = CM7, features = gene2show[1:10],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM7, features = gene2show[11:20],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM7, features = gene2show[21:30],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM7, features = gene2show[31:40],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+dev.off()
+
+load('~/project/sc_Cardiomyocytes/Hydrogel_Treatment/result/Hydrogel_bulkRNAseq_interesting_genes.RData')
+
+cardiac.genes = intersect(cardiac.genes,rownames(CM))
+pdf('Cardiac_markers_VlnPlot.pdf',4,10)
+Stacked_VlnPlot(seurat_object = CM, features = cardiac.genes[1:10],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = cardiac.genes[11:20],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = cardiac.genes[21:26],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+dev.off()
+
+mechanical.genes = intersect(mechanical.genes,rownames(CM))
+pdf('Mechanical_markers_VlnPlot.pdf',4,10)
+Stacked_VlnPlot(seurat_object = CM, features = mechanical.genes[1:10],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = mechanical.genes[11:20],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = mechanical.genes[21:30],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = mechanical.genes[31:40],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+Stacked_VlnPlot(seurat_object = CM, features = mechanical.genes[41:50],
+                x_lab_rotate = TRUE, group.by = 'Group',colors_use=scales::hue_pal()(4))
+dev.off()
+```
+
+## Feature plot
+## extract expression matrix and dimension reduction information
+```{r}
+exprMatrix = hydrogel@assays$RNA@data
+
+meta = hydrogel@meta.data
+cellsReduction = meta
+```
+
+
+## CM
+```{r,fig.width=2.5,fig.height=2.5}
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/marker')
+
+target_cells = rownames(meta[meta$CellType=='CM',])
+length(target_cells)
+  
+gene = 'Actn2'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Actn2 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+
+gene = 'Myh6'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Myh6 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Myh7'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Myh7 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Myl2'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Myl2 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Tnnt2'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Tnnt2 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Tnni3'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Tnni3 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+```
+
+## FB
+```{r,fig.width=2.5,fig.height=2.5}
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/marker')
+
+target_cells = rownames(meta[meta$CellType=='FB',])
+length(target_cells)
+  
+gene = 'Fn1'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Fn1 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+
+gene = 'Dcn'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Dcn = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Col1a1'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Col1a1 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+
+```
+
+## EC
+```{r,fig.width=2.5,fig.height=2.5}
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/marker')
+
+target_cells = rownames(meta[meta$CellType=='EC',])
+length(target_cells)
+  
+gene = 'Cdh5'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Cdh5 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+
+gene = 'Vwf'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Vwf = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Kdr'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Kdr = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+```
+
+
+## SMC
+```{r,fig.width=2.5,fig.height=2.5}
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/marker')
+
+target_cells = rownames(meta[meta$CellType=='SMC',])
+length(target_cells)
+  
+gene = 'Acta2'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Acta2 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+
+gene = 'Myh11'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Myh11 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Mylk'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Mylk = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+```
+
+## Immune
+```{r,fig.width=2.5,fig.height=2.5}
+target_cells = rownames(meta[meta$CellType%in%c('MP','T'),])
+length(target_cells)
+  
+gene = 'Ptprc'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Ptprc = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+target_cells = rownames(meta[meta$CellType%in%c('MP'),])
+
+gene = 'Cd14'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Cd14 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Cd68'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Cd68 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Csf1r'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Csf1r = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Cd163'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Cd163 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Mrc1'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Mrc1 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+
+target_cells = rownames(meta[meta$CellType%in%c('T'),])
+
+gene = 'Cd2'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Cd2 = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Cd3d'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Cd3d = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+
+gene = 'Cd3e'
+cellsReduction$expr = exprMatrix[gene,rownames(cellsReduction)]
+
+target = exprMatrix[gene, target_cells]
+target = sort(target)
+
+#tmp = meta[meta$RNA_snn_res.0.1%in%c(3),]$cellID
+non_target = exprMatrix[gene, !colnames(exprMatrix)%in%c(target_cells)]
+non_target = sort(non_target, decreasing = T)
+
+
+Cd3e = ggplot(cellsReduction[c(names(non_target),names(target)),],
+                        aes(x=UMAP_1,y=UMAP_2,col=expr))+#xlim(c(-10,7.5))+
+      geom_point(size=0.5)+scale_color_gradient(low = 'lightgrey',high = '#FF4500')+
+  labs(title = gene, x = '', y = '')+theme_void()+
+  theme(legend.position = 'none',plot.title = element_text(hjust = 0.5, size = 16))
+```
+
+
+```{r}
+library(cowplot)
+setwd('/share/home/shenlab/huangfei/project/sc_Cardiomyocytes/snRNAseq/figure/FeaturePlot/marker')
+
+pdf('CM_marker_feature_plot.pdf',9,6)
+plot_grid(Actn2,Myh6,Myh7,Myl2,Tnnt2,Tnni3,ncol = 3)
+dev.off()
+
+pdf('EC_marker_feature_plot.pdf',9,3)
+plot_grid(Cdh5,Vwf,Kdr,ncol = 3)
+dev.off()
+
+pdf('FB_marker_feature_plot.pdf',9,3)
+plot_grid(Col1a1,Dcn,Fn1,ncol = 3)
+dev.off()
+
+pdf('Immune_marker_feature_plot.pdf',9,9)
+plot_grid(Ptprc,Cd14,Cd68,Csf1r,Cd163,Mrc1,Cd2,Cd3d,Cd3e,ncol = 3)
+dev.off()
+
+pdf('SMC_marker_feature_plot.pdf',9,3)
+plot_grid(Acta2,Myh11,Mylk,ncol = 3)
+dev.off()
+```
+
+```{r}
+save(CM,file = '~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_CM_obj.RData')
+```
+
+```{r}
+load('~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_harmony_snRNAseq.RData')
+sham_vs_MI = subset(hydrogel, Group == 'Sham'|Group == 'MI')
+sham_vs_MI@meta.data$cell_type = as.character(sham_vs_MI@meta.data$CellType)
+sham_vs_MI@meta.data$label = as.character(sham_vs_MI@meta.data$Group)
+sham_vs_MI.augur = calculate_auc(input = sham_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 100,
+                                 subsample_size = 50,
+                                 n_threads = 4)
+
+soft_vs_MI = subset(hydrogel, Group == 'MI_soft'|Group == 'MI')
+soft_vs_MI@meta.data$cell_type = as.character(soft_vs_MI@meta.data$CellType)
+soft_vs_MI@meta.data$label = as.character(soft_vs_MI@meta.data$Group)
+soft_vs_MI.augur = calculate_auc(input = soft_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 100,
+                                 subsample_size = 50,
+                                 n_threads = 4)
+
+stiff_vs_MI = subset(hydrogel, Group == 'MI_stiff'|Group == 'MI')
+stiff_vs_MI@meta.data$cell_type = as.character(stiff_vs_MI@meta.data$CellType)
+stiff_vs_MI@meta.data$label = as.character(stiff_vs_MI@meta.data$Group)
+stiff_vs_MI.augur = calculate_auc(input = stiff_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 100,
+                                 subsample_size = 50,
+                                 n_threads = 4)
+
+stiff_vs_soft = subset(hydrogel, Group == 'MI_stiff'|Group == 'MI_soft')
+stiff_vs_soft@meta.data$cell_type = as.character(stiff_vs_soft@meta.data$CellType)
+stiff_vs_soft@meta.data$label = as.character(stiff_vs_soft@meta.data$Group)
+stiff_vs_soft.augur = calculate_auc(input = stiff_vs_soft,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 100,
+                                 subsample_size = 50,
+                                 n_threads = 4)
+
+save(sham_vs_MI.augur,soft_vs_MI.augur,stiff_vs_MI.augur,stiff_vs_soft.augur,
+     file = '~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Augur/Subsample100_CellType_priority_Augur.RData')
+```
+
+
+```{r}
+load('~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_harmony_snRNAseq.RData')
+sham_vs_MI = subset(hydrogel, Group == 'Sham'|Group == 'MI')
+sham_vs_MI@meta.data$cell_type = as.character(sham_vs_MI@meta.data$CellType)
+sham_vs_MI@meta.data$label = as.character(sham_vs_MI@meta.data$Group)
+sham_vs_MI.augur = calculate_auc(input = sham_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 200,
+                                 subsample_size = 100,
+                                 n_threads = 4)
+
+soft_vs_MI = subset(hydrogel, Group == 'MI_soft'|Group == 'MI')
+soft_vs_MI@meta.data$cell_type = as.character(soft_vs_MI@meta.data$CellType)
+soft_vs_MI@meta.data$label = as.character(soft_vs_MI@meta.data$Group)
+soft_vs_MI.augur = calculate_auc(input = soft_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 200,
+                                 subsample_size = 100,
+                                 n_threads = 4)
+
+stiff_vs_MI = subset(hydrogel, Group == 'MI_stiff'|Group == 'MI')
+stiff_vs_MI@meta.data$cell_type = as.character(stiff_vs_MI@meta.data$CellType)
+stiff_vs_MI@meta.data$label = as.character(stiff_vs_MI@meta.data$Group)
+stiff_vs_MI.augur = calculate_auc(input = stiff_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 200,
+                                 subsample_size = 100,
+                                 n_threads = 4)
+
+stiff_vs_soft = subset(hydrogel, Group == 'MI_stiff'|Group == 'MI_soft')
+stiff_vs_soft@meta.data$cell_type = as.character(stiff_vs_soft@meta.data$CellType)
+stiff_vs_soft@meta.data$label = as.character(stiff_vs_soft@meta.data$Group)
+stiff_vs_soft.augur = calculate_auc(input = stiff_vs_soft,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 200,
+                                 subsample_size = 100,
+                                 n_threads = 4)
+
+save(sham_vs_MI.augur,soft_vs_MI.augur,stiff_vs_MI.augur,stiff_vs_soft.augur,
+     file = '~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Augur/Subsample200_CellType_priority_Augur.RData')
+```
+
+```{r}
+load('~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Filtered_hydrogel_harmony_snRNAseq.RData')
+sham_vs_MI = subset(hydrogel, Group == 'Sham'|Group == 'MI')
+sham_vs_MI@meta.data$cell_type = as.character(sham_vs_MI@meta.data$CellType)
+sham_vs_MI@meta.data$label = as.character(sham_vs_MI@meta.data$Group)
+sham_vs_MI.augur = calculate_auc(input = sham_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 500,
+                                 subsample_size = 200,
+                                 n_threads = 4)
+
+soft_vs_MI = subset(hydrogel, Group == 'MI_soft'|Group == 'MI')
+soft_vs_MI@meta.data$cell_type = as.character(soft_vs_MI@meta.data$CellType)
+soft_vs_MI@meta.data$label = as.character(soft_vs_MI@meta.data$Group)
+soft_vs_MI.augur = calculate_auc(input = soft_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 500,
+                                 subsample_size = 200,
+                                 n_threads = 4)
+
+stiff_vs_MI = subset(hydrogel, Group == 'MI_stiff'|Group == 'MI')
+stiff_vs_MI@meta.data$cell_type = as.character(stiff_vs_MI@meta.data$CellType)
+stiff_vs_MI@meta.data$label = as.character(stiff_vs_MI@meta.data$Group)
+stiff_vs_MI.augur = calculate_auc(input = stiff_vs_MI,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 500,
+                                 subsample_size = 200,
+                                 n_threads = 4)
+
+stiff_vs_soft = subset(hydrogel, Group == 'MI_stiff'|Group == 'MI_soft')
+stiff_vs_soft@meta.data$cell_type = as.character(stiff_vs_soft@meta.data$CellType)
+stiff_vs_soft@meta.data$label = as.character(stiff_vs_soft@meta.data$Group)
+stiff_vs_soft.augur = calculate_auc(input = stiff_vs_soft,
+                                 #label_col = "Group",
+                                 #cell_type_col = "SubCluster",
+                                 n_subsamples = 500,
+                                 subsample_size = 200,
+                                 n_threads = 4)
+
+save(sham_vs_MI.augur,soft_vs_MI.augur,stiff_vs_MI.augur,stiff_vs_soft.augur,
+     file = '~/project/sc_Cardiomyocytes/snRNAseq/result/rdata/Augur/Subsample500_CellType_priority_Augur.RData')
+```
